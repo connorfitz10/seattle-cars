@@ -237,13 +237,25 @@ def cl_sweep(session, purveyor, lo, hi, out, budget, depth=0):
 def fetch_craigslist():
     session = requests.Session(impersonate="chrome")
     session.get(CL_WARM, timeout=30)
-    out, budget = {}, [CL_MAX_REQUESTS]
+    out, budget, expected = {}, [CL_MAX_REQUESTS], 0
     for purveyor in ("owner", "dealer"):
         before = len(out)
+        try:
+            expected += cl_query(session, 0, 2_000_000, purveyor).get(
+                "totalResultCount", 0)
+        except Exception:
+            pass
         cl_sweep(session, purveyor, 0, 2_000_000, out, budget)
         print(f"  craigslist by-{purveyor}: {len(out) - before} listings")
     print(f"  craigslist requests used: {CL_MAX_REQUESTS - budget[0]}")
-    return list(out.values())
+    # A sweep well short of the site's own count means bands failed
+    # (rate limiting); deactivating on such a partial view would wrongly
+    # mark the unfetched bands' listings as gone.
+    complete = expected == 0 or len(out) >= 0.85 * expected
+    if not complete:
+        print(f"  craigslist sweep partial ({len(out)}/{expected}); "
+              "deactivation will be skipped")
+    return list(out.values()), complete
 
 
 # --------------------------------------------------------------------------
@@ -638,12 +650,13 @@ def main():
     for source in only:
         print(f"Fetching {source} ({today})...")
         try:
-            rows = FETCHERS[source]()
+            result = FETCHERS[source]()
         except Exception as e:
             print(f"  {source} FAILED: {e}")
             continue
+        rows, complete = result if isinstance(result, tuple) else (result, True)
         new_count, drop_count = upsert(conn, rows, today)
-        gone = deactivate(conn, source, len(rows), today)
+        gone = deactivate(conn, source, len(rows) if complete else 0, today)
         conn.commit()
         new_by_source[source] = new_count
         drops_by_source[source] = drop_count
