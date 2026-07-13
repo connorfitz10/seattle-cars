@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seattle Used Car Tracker</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1f2937; --muted: #6b7280;
+    --accent: #0f4c81; --accent-light: #dbeafe; --drop: #dc2626; --drop-bg: #fee2e2;
+    --new-bg: #dcfce7; --new-ink: #15803d; --deal-bg: #fef3c7; --deal-ink: #b45309;
+    --border: #e5e7eb; --star: #f59e0b;
+    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--accent); color: #fff; padding: 14px 22px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header .updated { font-size: .8rem; opacity: .85; }
+  .stats { display: flex; gap: 22px; padding: 12px 22px; background: var(--card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .stat b { display: block; font-size: 1.15rem; }
+  .stat span { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .controls { display: flex; gap: 10px; padding: 12px 22px; flex-wrap: wrap; align-items: flex-end; background: var(--card); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1000; }
+  .controls label { font-size: .72rem; color: var(--muted); display: block; margin-bottom: 2px; }
+  .controls select, .controls input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .85rem; background: #fff; }
+  .controls input[type=number] { width: 92px; }
+  .controls input[type=text] { width: 130px; }
+  .tabs { display: flex; gap: 6px; margin-left: auto; }
+  .tabs button { padding: 7px 13px; border: 1px solid var(--border); background: #fff; border-radius: 999px; cursor: pointer; font-size: .85rem; }
+  .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 0; }
+  @media (max-width: 1050px) { main { grid-template-columns: 1fr; } aside { display: none; } }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 14px; padding: 16px 22px; align-content: start; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; transition: box-shadow .15s; }
+  .card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.10); }
+  .thumb { height: 150px; background: linear-gradient(135deg,#e5e7eb,#f3f4f6); display:flex; align-items:center; justify-content:center; font-size:2rem; position: relative; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; position:absolute; inset:0; }
+  .card .top { padding: 10px 14px 0; display: flex; justify-content: space-between; align-items: start; }
+  .price { font-size: 1.2rem; font-weight: 700; }
+  .fav { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #d1d5db; line-height: 1; }
+  .fav.on { color: var(--star); }
+  .badges { padding: 0 14px; display: flex; gap: 5px; flex-wrap: wrap; min-height: 20px; margin-top: 4px; }
+  .badge { font-size: .68rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .badge.drop { background: var(--drop-bg); color: var(--drop); }
+  .badge.deal { background: var(--deal-bg); color: var(--deal-ink); }
+  .badge.new { background: var(--new-bg); color: var(--new-ink); }
+  .badge.owner { background: #ede9fe; color: #6d28d9; }
+  .badge.multi { background: #e0f2fe; color: #0369a1; }
+  .badge.src { color: #fff; }
+  .card .body { padding: 8px 14px 12px; font-size: .84rem; color: var(--muted); flex: 1; }
+  .card .name { color: var(--ink); font-weight: 600; margin-bottom: 3px; line-height: 1.3; }
+  .facts { display: flex; gap: 10px; margin-top: 6px; font-size: .8rem; flex-wrap: wrap; }
+  .facts b { color: var(--ink); }
+  .card a.view { display: block; text-align: center; padding: 8px; background: #f9fafb; border-top: 1px solid var(--border); color: var(--accent); text-decoration: none; font-size: .82rem; font-weight: 600; }
+  .card a.view:hover { background: var(--accent-light); }
+  .history { font-size: .74rem; margin-top: 6px; color: var(--drop); }
+  aside { border-left: 1px solid var(--border); background: var(--card); padding: 16px 18px; position: sticky; top: 61px; height: calc(100vh - 61px); overflow-y: auto; }
+  aside h3 { margin: 8px 0 6px; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  aside svg { width: 100%; height: auto; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .72rem; color: var(--muted); margin: 4px 0 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+  .makebar { display: flex; align-items: center; gap: 8px; font-size: .78rem; margin: 3px 0; }
+  .makebar .bar { height: 10px; background: var(--accent); border-radius: 3px; opacity: .75; }
+  .makebar .n { color: var(--muted); }
+  .empty { padding: 40px; color: var(--muted); text-align: center; grid-column: 1/-1; }
+  .more { grid-column: 1/-1; text-align: center; padding: 8px 0 20px; }
+  .more button { padding: 9px 22px; border: 1px solid var(--border); border-radius: 999px; background: #fff; cursor: pointer; font-size: .85rem; }
+  .disclaimer { padding: 14px 22px 26px; font-size: .72rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🚗 Seattle Used Car Tracker</h1>
+  <span class="updated" id="updated"></span>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="controls">
+  <div><label>Search</label><input type="text" id="f-q" placeholder="title, model…"></div>
+  <div><label>Make</label><select id="f-make"><option value="">All makes</option></select></div>
+  <div><label>Model</label><input type="text" id="f-model" list="model-list" placeholder="Any"><datalist id="model-list"></datalist></div>
+  <div><label>Year ≥</label><input type="number" id="f-ymin" placeholder="min" step="1"></div>
+  <div><label>Price max</label><input type="number" id="f-max" placeholder="$ max" step="1000"></div>
+  <div><label>Miles max</label><input type="number" id="f-miles" placeholder="max" step="10000"></div>
+  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option></select></div>
+  <div><label>Seller</label><select id="f-seller"><option value="">All</option><option value="owner">Private party</option><option value="dealer">Dealer</option></select></div>
+  <div><label>Sort</label><select id="f-sort">
+    <option value="new">Newest listed</option>
+    <option value="price-asc">Price ↑</option>
+    <option value="price-desc">Price ↓</option>
+    <option value="drop-desc">Biggest price drop</option>
+    <option value="miles-asc">Mileage ↑</option>
+    <option value="kbb-asc">$ vs KBB ↑</option>
+    <option value="year-desc">Year ↓</option>
+  </select></div>
+  <div class="tabs">
+    <button data-tab="all" class="on">All</button>
+    <button data-tab="drops">Price drops</button>
+    <button data-tab="deals">Deals</button>
+    <button data-tab="new">New</button>
+    <button data-tab="favs">★ Saved</button>
+  </div>
+</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <aside>
+    <h3>Median asking price</h3>
+    <svg id="chart-price" viewBox="0 0 320 130"></svg>
+    <h3>Active listings tracked</h3>
+    <svg id="chart-count" viewBox="0 0 320 130"></svg>
+    <div class="legend" id="legend"></div>
+    <h3>Top makes (current view)</h3>
+    <div id="makes"></div>
+  </aside>
+</main>
+
+<p class="disclaimer">Data gathered from publicly visible listings on Craigslist, Autotrader, Cars.com and CarMax for personal use; all listing content belongs to its respective source. Autotrader and Cars.com are sampled rather than exhaustive, so market totals are indicative, not census counts. Not affiliated with any listed site. Verify all details on the listing page before making decisions.</p>
+
+<script>
+let DATA = null, TAB = 'all', LIMIT = 240;
+const $ = id => document.getElementById(id);
+const favs = new Set(JSON.parse(localStorage.getItem('seacars-favs') || '[]'));
+const fmt$ = n => n == null ? '—' : '$' + n.toLocaleString();
+const fmtK = n => n == null ? '—' : (n >= 1000 ? Math.round(n/1000) + 'k' : n) ;
+const daysAgo = iso => Math.round((Date.now() - new Date(iso + 'T12:00')) / 86400000);
+const SRC = { craigslist: ['Craigslist', 'var(--c-craigslist)'], autotrader: ['Autotrader', 'var(--c-autotrader)'],
+              carscom: ['Cars.com', 'var(--c-carscom)'], carmax: ['CarMax', 'var(--c-carmax)'] };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function load() {
+  const res = await fetch('data/listings.json', { cache: 'no-cache' });
+  DATA = await res.json();
+  $('updated').textContent = `Updated ${DATA.updated} · ${DATA.region} · ${DATA.listings.length.toLocaleString()} active listings`;
+  const makes = [...new Set(DATA.listings.map(l => l.make).filter(Boolean))].sort();
+  for (const m of makes) $('f-make').add(new Option(m, m));
+  render();
+  drawTrends();
+}
+
+const name = l => l.title || [l.year, l.make, l.model, l.trim].filter(Boolean).join(' ');
+const isNew = l => l.dom != null ? l.dom <= 3 : (l.posted ? daysAgo(l.posted) <= 3 : daysAgo(l.first_seen) <= 3);
+const isDeal = l => l.vs_kbb_pct != null && l.vs_kbb_pct <= 95;
+
+function filtered() {
+  const q = $('f-q').value.trim().toLowerCase();
+  const make = $('f-make').value, model = $('f-model').value.trim().toLowerCase();
+  const ymin = +$('f-ymin').value || 0, pmax = +$('f-max').value || Infinity;
+  const miles = +$('f-miles').value || Infinity;
+  const source = $('f-source').value, seller = $('f-seller').value;
+  let rows = DATA.listings.filter(l =>
+    (!q || name(l).toLowerCase().includes(q)) &&
+    (!make || l.make === make) &&
+    (!model || (l.model || '').toLowerCase().includes(model)) &&
+    (l.year || 0) >= ymin &&
+    (l.price == null || l.price <= pmax) && (l.price != null || pmax === Infinity) &&
+    (l.mileage == null || l.mileage <= miles) &&
+    (!source || l.source === source) &&
+    (!seller || l.seller_type === seller)
+  );
+  if (TAB === 'drops') rows = rows.filter(l => l.price_drop > 0);
+  if (TAB === 'deals') rows = rows.filter(isDeal);
+  if (TAB === 'new') rows = rows.filter(isNew);
+  if (TAB === 'favs') rows = rows.filter(l => favs.has(l.key));
+  const cmp = {
+    'new':        (a, b) => (a.dom ?? daysAgo(a.posted || a.first_seen)) - (b.dom ?? daysAgo(b.posted || b.first_seen)),
+    'price-asc':  (a, b) => (a.price ?? 9e9) - (b.price ?? 9e9),
+    'price-desc': (a, b) => (b.price ?? 0) - (a.price ?? 0),
+    'drop-desc':  (a, b) => (b.price_drop_pct || 0) - (a.price_drop_pct || 0),
+    'miles-asc':  (a, b) => (a.mileage ?? 9e9) - (b.mileage ?? 9e9),
+    'kbb-asc':    (a, b) => (a.vs_kbb_pct ?? 9e9) - (b.vs_kbb_pct ?? 9e9),
+    'year-desc':  (a, b) => (b.year ?? 0) - (a.year ?? 0),
+  }[$('f-sort').value];
+  return rows.sort(cmp);
+}
+
+function median(a) {
+  if (!a.length) return null;
+  const s = [...a].sort((x, y) => x - y);
+  return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2);
+}
+
+function render() {
+  const rows = filtered();
+  const prices = rows.map(l => l.price).filter(p => p >= 500);
+  const drops = rows.filter(l => l.price_drop > 0).length;
+  $('stats').innerHTML = `
+    <div class="stat"><b>${rows.length.toLocaleString()}</b><span>listings shown</span></div>
+    <div class="stat"><b>${fmt$(median(prices))}</b><span>median price</span></div>
+    <div class="stat"><b>${fmtK(median(rows.map(l => l.mileage).filter(Boolean)))}</b><span>median miles</span></div>
+    <div class="stat"><b>${drops.toLocaleString()}</b><span>with price drops</span></div>
+    <div class="stat"><b>${favs.size}</b><span>saved</span></div>`;
+
+  const shown = rows.slice(0, LIMIT);
+  $('grid').innerHTML = (shown.length ? shown.map(card).join('') :
+    '<div class="empty">No listings match these filters.</div>') +
+    (rows.length > LIMIT ? `<div class="more"><button onclick="LIMIT+=240;render()">Show more (${(rows.length - LIMIT).toLocaleString()} remaining)</button></div>` : '');
+  drawMakes(rows);
+}
+
+function card(l) {
+  const [srcName, srcColor] = SRC[l.source] || [l.source, '#888'];
+  const hist = l.price_history && l.price_history.length > 1
+    ? `<div class="history">↓ was ${fmt$(l.original_price)} (${l.price_drop_pct}% drop)</div>` : '';
+  return `<div class="card">
+    <div class="thumb">🚗${l.image_url ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(l.image_url)}" alt="" onerror="this.remove()">` : ''}</div>
+    <div class="top">
+      <span class="price">${fmt$(l.price)}</span>
+      <button class="fav ${favs.has(l.key) ? 'on' : ''}" onclick="toggleFav('${esc(l.key)}', this)" title="Save for later">★</button>
+    </div>
+    <div class="badges">
+      ${l.price_drop > 0 ? `<span class="badge drop">▼ ${fmt$(l.price_drop)}</span>` : ''}
+      ${isDeal(l) ? `<span class="badge deal">${l.vs_kbb_pct}% of KBB</span>` : ''}
+      ${isNew(l) ? '<span class="badge new">NEW</span>' : ''}
+      <span class="badge src" style="background:${srcColor}">${srcName}</span>
+      ${l.seller_type === 'owner' ? '<span class="badge owner">private party</span>' : ''}
+      ${l.vin_sources > 1 ? `<span class="badge multi">${l.vin_sources} sources</span>` : ''}
+    </div>
+    <div class="body">
+      <div class="name">${esc(name(l) || 'Untitled listing')}</div>
+      <div class="facts">
+        <span><b>${l.mileage ? l.mileage.toLocaleString() : '—'}</b> mi</span>
+        ${l.year ? `<span><b>${l.year}</b></span>` : ''}
+        ${l.city ? `<span>${esc(l.city)}</span>` : ''}
+      </div>
+      <div class="facts">
+        ${l.kbb_fair_price ? `<span>KBB fair <b>${fmt$(l.kbb_fair_price)}</b></span>` : ''}
+        ${l.dom != null ? `<span><b>${l.dom}</b>d listed</span>` : (l.posted ? `<span>posted <b>${esc(l.posted)}</b></span>` : '')}
+        ${l.seller_name && l.source !== 'autotrader' ? `<span>${esc(l.seller_name)}</span>` : ''}
+      </div>
+      ${hist}
+    </div>
+    <a class="view" href="${esc(l.url || '#')}" target="_blank" rel="noopener">View on ${srcName} →</a>
+  </div>`;
+}
+
+function toggleFav(key, btn) {
+  favs.has(key) ? favs.delete(key) : favs.add(key);
+  localStorage.setItem('seacars-favs', JSON.stringify([...favs]));
+  btn.classList.toggle('on');
+  if (TAB === 'favs') render();
+}
+
+function drawMakes(rows) {
+  const counts = {};
+  for (const l of rows) if (l.make) counts[l.make] = (counts[l.make] || 0) + 1;
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  const max = top[0]?.[1] || 1;
+  $('makes').innerHTML = top.map(([m, n]) =>
+    `<div class="makebar"><span style="width:86px">${esc(m)}</span>
+     <div class="bar" style="width:${Math.round(120 * n / max)}px"></div><span class="n">${n.toLocaleString()}</span></div>`).join('');
+}
+
+function drawTrends() {
+  const bySrc = {};
+  for (const t of DATA.trends) (bySrc[t.source] = bySrc[t.source] || []).push(t);
+  const dates = [...new Set(DATA.trends.map(t => t.date))].sort();
+  drawChart('chart-price', bySrc, dates, t => t.median_price, v => '$' + fmtK(v));
+  drawChart('chart-count', bySrc, dates, t => t.active, v => fmtK(v));
+  $('legend').innerHTML = Object.keys(bySrc).map(s => {
+    const [n, c] = s === 'all' ? ['All sources', 'var(--ink)'] : (SRC[s] || [s, '#888']);
+    return `<span><i style="background:${c}"></i>${n}</span>`;
+  }).join('');
+}
+
+function drawChart(id, bySrc, dates, val, fmt) {
+  const W = 320, H = 130, P = { l: 40, r: 6, t: 8, b: 18 };
+  const all = DATA.trends.map(val).filter(v => v != null);
+  if (!all.length || !dates.length) { $(id).innerHTML = ''; return; }
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (lo === hi) { lo *= 0.9; hi *= 1.1; }
+  const x = d => dates.length === 1 ? (P.l + W - P.r) / 2 : P.l + (W - P.l - P.r) * dates.indexOf(d) / (dates.length - 1);
+  const y = v => H - P.b - (H - P.t - P.b) * (v - lo) / (hi - lo);
+  let out = `<line x1="${P.l}" y1="${H - P.b}" x2="${W - P.r}" y2="${H - P.b}" stroke="#e5e7eb"/>`;
+  out += `<text x="2" y="${y(hi) + 4}" font-size="9" fill="#6b7280">${fmt(hi)}</text>`;
+  out += `<text x="2" y="${y(lo) + 4}" font-size="9" fill="#6b7280">${fmt(lo)}</text>`;
+  out += `<text x="${P.l}" y="${H - 4}" font-size="9" fill="#6b7280">${dates[0].slice(5)}</text>`;
+  if (dates.length > 1) out += `<text x="${W - P.r}" y="${H - 4}" font-size="9" fill="#6b7280" text-anchor="end">${dates[dates.length - 1].slice(5)}</text>`;
+  for (const [s, rows] of Object.entries(bySrc)) {
+    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04' }[s] || '#888');
+    const pts = rows.filter(t => val(t) != null).map(t => `${x(t.date).toFixed(1)},${y(val(t)).toFixed(1)}`);
+    if (pts.length > 1) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${s === 'all' ? 2 : 1.2}"/>`;
+    for (const p of pts) out += `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2" fill="${color}"/>`;
+  }
+  $(id).innerHTML = out;
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); TAB = b.dataset.tab; LIMIT = 240; render();
+});
+['f-q','f-make','f-model','f-ymin','f-max','f-miles','f-source','f-seller','f-sort'].forEach(id => $(id).oninput = () => { LIMIT = 240; render(); });
+$('f-make').addEventListener('input', () => {
+  const make = $('f-make').value;
+  const models = [...new Set(DATA.listings.filter(l => !make || l.make === make).map(l => l.model).filter(Boolean))].sort();
+  $('model-list').innerHTML = models.slice(0, 200).map(m => `<option value="${esc(m)}">`).join('');
+});
+
+load().catch(e => { $('grid').innerHTML = `<div class="empty">Failed to load data: ${esc(e.message)}.<br>Run <code>python fetch_listings.py</code> first, and open this page via a local server.</div>`; });
+</script>
+</body>
+</html>
