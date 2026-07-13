@@ -10,7 +10,7 @@
     --accent: #0f4c81; --accent-light: #dbeafe; --drop: #dc2626; --drop-bg: #fee2e2;
     --new-bg: #dcfce7; --new-ink: #15803d; --deal-bg: #fef3c7; --deal-ink: #b45309;
     --border: #e5e7eb; --star: #f59e0b;
-    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04;
+    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04; --c-edmunds: #16a34a;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
@@ -83,7 +83,7 @@
   <div><label>Year ≥</label><input type="number" id="f-ymin" placeholder="min" step="1"></div>
   <div><label>Price max</label><input type="number" id="f-max" placeholder="$ max" step="1000"></div>
   <div><label>Miles max</label><input type="number" id="f-miles" placeholder="max" step="10000"></div>
-  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option></select></div>
+  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option><option value="edmunds">Edmunds</option></select></div>
   <div><label>Seller</label><select id="f-seller"><option value="">All</option><option value="owner">Private party</option><option value="dealer">Dealer</option></select></div>
   <div><label>Sort</label><select id="f-sort">
     <option value="new">Newest listed</option>
@@ -126,7 +126,9 @@ const fmt$ = n => n == null ? '—' : '$' + n.toLocaleString();
 const fmtK = n => n == null ? '—' : (n >= 1000 ? Math.round(n/1000) + 'k' : n) ;
 const daysAgo = iso => Math.round((Date.now() - new Date(iso + 'T12:00')) / 86400000);
 const SRC = { craigslist: ['Craigslist', 'var(--c-craigslist)'], autotrader: ['Autotrader', 'var(--c-autotrader)'],
-              carscom: ['Cars.com', 'var(--c-carscom)'], carmax: ['CarMax', 'var(--c-carmax)'] };
+              carscom: ['Cars.com', 'var(--c-carscom)'], carmax: ['CarMax', 'var(--c-carmax)'],
+              edmunds: ['Edmunds', 'var(--c-edmunds)'] };
+const FAIR = { autotrader: 'KBB fair', edmunds: 'Mkt est.' };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function load() {
@@ -211,7 +213,7 @@ function card(l) {
     </div>
     <div class="badges">
       ${l.price_drop > 0 ? `<span class="badge drop">▼ ${fmt$(l.price_drop)}</span>` : ''}
-      ${isDeal(l) ? `<span class="badge deal">${l.vs_kbb_pct}% of KBB</span>` : ''}
+      ${isDeal(l) ? `<span class="badge deal">${l.vs_kbb_pct}% of ${l.source === 'edmunds' ? 'mkt est.' : 'KBB'}</span>` : ''}
       ${isNew(l) ? '<span class="badge new">NEW</span>' : ''}
       <span class="badge src" style="background:${srcColor}">${srcName}</span>
       ${l.seller_type === 'owner' ? '<span class="badge owner">private party</span>' : ''}
@@ -225,7 +227,7 @@ function card(l) {
         ${l.city ? `<span>${esc(l.city)}</span>` : ''}
       </div>
       <div class="facts">
-        ${l.kbb_fair_price ? `<span>KBB fair <b>${fmt$(l.kbb_fair_price)}</b></span>` : ''}
+        ${l.kbb_fair_price ? `<span>${FAIR[l.source] || 'Fair'} <b>${fmt$(l.kbb_fair_price)}</b></span>` : ''}
         ${l.dom != null ? `<span><b>${l.dom}</b>d listed</span>` : (l.posted ? `<span>posted <b>${esc(l.posted)}</b></span>` : '')}
         ${l.seller_name && l.source !== 'autotrader' ? `<span>${esc(l.seller_name)}</span>` : ''}
       </div>
@@ -278,7 +280,7 @@ function drawChart(id, bySrc, dates, val, fmt) {
   out += `<text x="${P.l}" y="${H - 4}" font-size="9" fill="#6b7280">${dates[0].slice(5)}</text>`;
   if (dates.length > 1) out += `<text x="${W - P.r}" y="${H - 4}" font-size="9" fill="#6b7280" text-anchor="end">${dates[dates.length - 1].slice(5)}</text>`;
   for (const [s, rows] of Object.entries(bySrc)) {
-    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04' }[s] || '#888');
+    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04', edmunds: '#16a34a' }[s] || '#888');
     const pts = rows.filter(t => val(t) != null).map(t => `${x(t.date).toFixed(1)},${y(val(t)).toFixed(1)}`);
     if (pts.length > 1) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${s === 'all' ? 2 : 1.2}"/>`;
     for (const p of pts) out += `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2" fill="${color}"/>`;

@@ -69,6 +69,12 @@ CARSCOM_DELAY_S = 0.5
 CARMAX_API = "https://www.carmax.com/cars/api/search/run"
 CARMAX_DELAY_S = 0.3
 
+# --- edmunds ---
+EDMUNDS_API = ("https://www.edmunds.com/gateway/api/purchasefunnel/v1/srp/"
+               "inventory")
+EDMUNDS_PAGES = 30                # nearest ~600 listings per day
+EDMUNDS_DELAY_S = 2.5
+
 # How many days a listing may go unseen before it is marked inactive, and
 # the minimum fetch size for the sweep to be trusted for deactivation
 # (a partial API failure must not mass-deactivate the database).
@@ -77,6 +83,7 @@ SOURCE_POLICY = {
     "autotrader": {"grace_days": 10, "min_fetch": 1000},
     "carscom":    {"grace_days": 14, "min_fetch": 100},
     "carmax":     {"grace_days": 2, "min_fetch": 200},
+    "edmunds":    {"grace_days": 10, "min_fetch": 200},
 }
 
 # Make aliases for parsing craigslist titles (alias -> canonical).
@@ -460,6 +467,81 @@ def fetch_carmax():
 
 
 # --------------------------------------------------------------------------
+# edmunds
+# --------------------------------------------------------------------------
+
+def fetch_edmunds():
+    """Edmunds' inventory API answers the first request of a fresh session,
+    then its bot protection (Akamai) serves empty decoys — so every page
+    gets its own session. Results are distance-sorted, giving a stable
+    'nearest ~600' subset that is re-seen daily (good drop tracking).
+    Includes Edmunds' own market-value estimate and deal rating."""
+    today_ms = time.time() * 1000
+    out = {}
+    for page in range(1, EDMUNDS_PAGES + 1):
+        results = None
+        for attempt in (1, 2):
+            session = requests.Session(impersonate="chrome")
+            try:
+                r = session.get(EDMUNDS_API, params={
+                    # NB: this endpoint silently ignores lowercase param
+                    # names on paged requests (serving NEW cars) — the
+                    # camelCase spellings are the ones that stick.
+                    "zip": ZIP, "radius": str(RADIUS),
+                    "inventoryType": "used,cpo",
+                    "pageNum": str(page), "pagesize": "20",
+                }, timeout=30, headers={
+                    "Referer": "https://www.edmunds.com/inventory/srp.html"})
+                r.raise_for_status()
+                results = r.json().get("inventories", {}).get("results") or []
+                if results:
+                    break
+            except Exception as e:
+                if attempt == 2:
+                    print(f"  edmunds page {page}: {e}")
+            time.sleep(3)
+        if not results:
+            print(f"  edmunds stopped at page {page} (empty response twice)")
+            break
+        for h in results:
+            vin = h.get("vin")
+            if not vin:
+                continue
+            vi = h.get("vehicleInfo") or {}
+            si = vi.get("styleInfo") or {}
+            prices = h.get("prices") or {}
+            pv = (h.get("thirdPartyInfo") or {}).get("priceValidation") or {}
+            dealer = h.get("dealerInfo") or {}
+            addr = dealer.get("address") or {}
+            listed = h.get("listedSince")
+            dom = (int((today_ms - listed) / 86_400_000)
+                   if isinstance(listed, (int, float)) and listed > 0 else None)
+            make, model, year = si.get("make"), si.get("model"), si.get("year")
+            slug = "/".join(str(x).lower().replace(" ", "-")
+                            for x in (make, model, year) if x)
+            key = f"edmunds:{vin}"
+            out[key] = {
+                "key": key, "source": "edmunds", "source_id": vin, "vin": vin,
+                "url": f"https://www.edmunds.com/{slug}/vin/{vin}/" if slug else None,
+                "title": None,
+                "year": to_int(year), "make": make, "model": model,
+                "trim": si.get("trim"),
+                "price": to_int(prices.get("displayPrice")
+                                or prices.get("advertisedPrice")),
+                "mileage": to_int(vi.get("mileage")),
+                "city": addr.get("city"), "lat": None, "lng": None,
+                "seller_type": "owner" if h.get("isPrivateParty") else "dealer",
+                "seller_name": (dealer.get("displayInfo") or {}).get(
+                    "parentDealershipName"),
+                "kbb_fair_price": to_int(pv.get("listPriceEstimate")),
+                "image_url": None,
+                "dom": dom, "posted": None,
+            }
+        time.sleep(EDMUNDS_DELAY_S)
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------
 # database
 # --------------------------------------------------------------------------
 
@@ -636,6 +718,7 @@ FETCHERS = {
     "autotrader": fetch_autotrader,
     "carscom": fetch_carscom,
     "carmax": fetch_carmax,
+    "edmunds": fetch_edmunds,
 }
 
 

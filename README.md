@@ -43,6 +43,11 @@ pip install -r requirements.txt
 | CarMax     | full local sweep daily (~850) | Clean fixed-price benchmark, full listing detail. |
 | Autotrader | daily sample (~3.5k) | Serves only the first ~430 results of any query and the metro has ~48k cars, so each price band contributes its cheapest/priciest ~430, alternating sort direction by day. Includes KBB fair-purchase-price, which powers the "Deals" tab. |
 | Cars.com   | newest ~500 daily | New-to-market dealer inventory; overlaps Autotrader heavily, so it isn't swept exhaustively. |
+| Edmunds    | nearest ~600 daily | Distance-sorted stable subset (same cars re-seen daily). Includes Edmunds' own market-value estimate and deal rating. Their bot protection answers only the first request per session, so the fetch uses one session per page. |
+
+(Amazon Autos was evaluated and skipped: its storefront is fully
+JS-rendered with no reachable inventory feed, and the pilot's used
+inventory is tiny.)
 
 Because Autotrader and Cars.com are samples, market *totals* are
 indicative rather than a census; Craigslist and CarMax numbers are
