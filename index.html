@@ -10,7 +10,7 @@
     --accent: #0f4c81; --accent-light: #dbeafe; --drop: #dc2626; --drop-bg: #fee2e2;
     --new-bg: #dcfce7; --new-ink: #15803d; --deal-bg: #fef3c7; --deal-ink: #b45309;
     --border: #e5e7eb; --star: #f59e0b;
-    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04; --c-edmunds: #16a34a;
+    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04; --c-edmunds: #16a34a; --c-dealer: #db2777;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
@@ -81,9 +81,10 @@
   <div><label>Make</label><select id="f-make"><option value="">All makes</option></select></div>
   <div><label>Model</label><input type="text" id="f-model" list="model-list" placeholder="Any"><datalist id="model-list"></datalist></div>
   <div><label>Year ≥</label><input type="number" id="f-ymin" placeholder="min" step="1"></div>
+  <div><label>Price min</label><input type="number" id="f-pmin" placeholder="$ min" step="1000"></div>
   <div><label>Price max</label><input type="number" id="f-max" placeholder="$ max" step="1000"></div>
   <div><label>Miles max</label><input type="number" id="f-miles" placeholder="max" step="10000"></div>
-  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option><option value="edmunds">Edmunds</option></select></div>
+  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option><option value="edmunds">Edmunds</option><option value="dealer">Dealer sites</option></select></div>
   <div><label>Seller</label><select id="f-seller"><option value="">All</option><option value="owner">Private party</option><option value="dealer">Dealer</option></select></div>
   <div><label>Sort</label><select id="f-sort">
     <option value="new">Newest listed</option>
@@ -127,7 +128,7 @@ const fmtK = n => n == null ? '—' : (n >= 1000 ? Math.round(n/1000) + 'k' : n)
 const daysAgo = iso => Math.round((Date.now() - new Date(iso + 'T12:00')) / 86400000);
 const SRC = { craigslist: ['Craigslist', 'var(--c-craigslist)'], autotrader: ['Autotrader', 'var(--c-autotrader)'],
               carscom: ['Cars.com', 'var(--c-carscom)'], carmax: ['CarMax', 'var(--c-carmax)'],
-              edmunds: ['Edmunds', 'var(--c-edmunds)'] };
+              edmunds: ['Edmunds', 'var(--c-edmunds)'], dealer: ['Dealer site', 'var(--c-dealer)'] };
 const FAIR = { autotrader: 'KBB fair', edmunds: 'Mkt est.' };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -148,7 +149,8 @@ const isDeal = l => l.vs_kbb_pct != null && l.vs_kbb_pct <= 95;
 function filtered() {
   const q = $('f-q').value.trim().toLowerCase();
   const make = $('f-make').value, model = $('f-model').value.trim().toLowerCase();
-  const ymin = +$('f-ymin').value || 0, pmax = +$('f-max').value || Infinity;
+  const ymin = +$('f-ymin').value || 0;
+  const pmin = +$('f-pmin').value || 0, pmax = +$('f-max').value || Infinity;
   const miles = +$('f-miles').value || Infinity;
   const source = $('f-source').value, seller = $('f-seller').value;
   let rows = DATA.listings.filter(l =>
@@ -156,7 +158,8 @@ function filtered() {
     (!make || l.make === make) &&
     (!model || (l.model || '').toLowerCase().includes(model)) &&
     (l.year || 0) >= ymin &&
-    (l.price == null || l.price <= pmax) && (l.price != null || pmax === Infinity) &&
+    (l.price == null ? (pmin === 0 && pmax === Infinity)
+                     : (l.price >= pmin && l.price <= pmax)) &&
     (l.mileage == null || l.mileage <= miles) &&
     (!source || l.source === source) &&
     (!seller || l.seller_type === seller)
@@ -280,7 +283,7 @@ function drawChart(id, bySrc, dates, val, fmt) {
   out += `<text x="${P.l}" y="${H - 4}" font-size="9" fill="#6b7280">${dates[0].slice(5)}</text>`;
   if (dates.length > 1) out += `<text x="${W - P.r}" y="${H - 4}" font-size="9" fill="#6b7280" text-anchor="end">${dates[dates.length - 1].slice(5)}</text>`;
   for (const [s, rows] of Object.entries(bySrc)) {
-    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04', edmunds: '#16a34a' }[s] || '#888');
+    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04', edmunds: '#16a34a', dealer: '#db2777' }[s] || '#888');
     const pts = rows.filter(t => val(t) != null).map(t => `${x(t.date).toFixed(1)},${y(val(t)).toFixed(1)}`);
     if (pts.length > 1) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${s === 'all' ? 2 : 1.2}"/>`;
     for (const p of pts) out += `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2" fill="${color}"/>`;
@@ -292,7 +295,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
   b.classList.add('on'); TAB = b.dataset.tab; LIMIT = 240; render();
 });
-['f-q','f-make','f-model','f-ymin','f-max','f-miles','f-source','f-seller','f-sort'].forEach(id => $(id).oninput = () => { LIMIT = 240; render(); });
+['f-q','f-make','f-model','f-ymin','f-pmin','f-max','f-miles','f-source','f-seller','f-sort'].forEach(id => $(id).oninput = () => { LIMIT = 240; render(); });
 $('f-make').addEventListener('input', () => {
   const make = $('f-make').value;
   const models = [...new Set(DATA.listings.filter(l => !make || l.make === make).map(l => l.model).filter(Boolean))].sort();

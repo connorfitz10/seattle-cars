@@ -75,6 +75,17 @@ EDMUNDS_API = ("https://www.edmunds.com/gateway/api/purchasefunnel/v1/srp/"
 EDMUNDS_PAGES = 30                # nearest ~600 listings per day
 EDMUNDS_DELAY_S = 2.5
 
+# --- local dealership sites (all on the Team Velocity platform, which
+# server-renders its inventory grid — same parser works for each) ---
+DEALER_SITES = [
+    # Honda of Seattle and Toyota of Seattle are sister stores sharing one
+    # used-inventory pool — one fetch covers both.
+    ("Honda/Toyota of Seattle", "https://www.hondaofseattle.com", "Seattle"),
+    ("Klein Honda", "https://www.kleinhonda.com", "Everett"),
+]
+DEALER_MAX_PAGES = 12
+DEALER_DELAY_S = 0.8
+
 # How many days a listing may go unseen before it is marked inactive, and
 # the minimum fetch size for the sweep to be trusted for deactivation
 # (a partial API failure must not mass-deactivate the database).
@@ -84,6 +95,7 @@ SOURCE_POLICY = {
     "carscom":    {"grace_days": 14, "min_fetch": 100},
     "carmax":     {"grace_days": 2, "min_fetch": 200},
     "edmunds":    {"grace_days": 10, "min_fetch": 200},
+    "dealer":     {"grace_days": 2, "min_fetch": 50},
 }
 
 # Make aliases for parsing craigslist titles (alias -> canonical).
@@ -542,6 +554,88 @@ def fetch_edmunds():
 
 
 # --------------------------------------------------------------------------
+# local dealership sites (Team Velocity platform)
+# --------------------------------------------------------------------------
+
+DEALER_CARD_RE = re.compile(r'data-itemid="([^"]+)"')
+DEALER_VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
+
+
+def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out):
+    parts = itemid.rsplit("-", 1)
+    if len(parts) != 2 or not DEALER_VIN_RE.match(parts[1]):
+        return
+    ymt, vin = parts
+    tokens = ymt.split("-")
+    # hyphenated makes split apart ("Mercedes-Benz-C 300-…"); re-join via
+    # the known-makes table
+    make, rest = tokens[0], tokens[1:]
+    if len(tokens) >= 2 and f"{tokens[0]} {tokens[1]}".lower() in MAKES:
+        make, rest = f"{tokens[0]} {tokens[1]}", tokens[2:]
+    make = MAKES.get(make.lower(), make)
+    model = rest[0] if rest else None
+    trim = rest[1] if len(rest) > 1 else None
+
+    href = re.search(r'href="(https?://[^"]*?/viewdetails/[^"]+?)[?"]', segment)
+    url = href.group(1) if href else f"{base_url}/inventory/used"
+    year = None
+    ym = re.search(r"/viewdetails/[^/]+/[^/]+/((?:19|20)\d{2})-", url)
+    if ym:
+        year = int(ym.group(1))
+    price = re.search(r"\$\s*([\d,]{4,})", segment)
+    mileage = (re.search(r'details-item-label">\s*Mileage\s*</div>\s*'
+                         r'<div class="details-item-value">\s*([\d,]+)', segment)
+               or re.search(r'"mileageFromOdometer"[^}]*?"value":\s*"?([\d,]+)',
+                            segment)
+               or re.search(r"([\d,]{4,})\s*Miles\b", segment))
+    image = re.search(r'(https://content\.homenetiol\.com/[^"\s]+?\.(?:jpg|png|webp))',
+                      segment)
+    key = f"dealer:{vin}"
+    out[key] = {
+        "key": key, "source": "dealer", "source_id": vin, "vin": vin,
+        "url": url,
+        "title": " ".join(str(x) for x in (year, make, model, trim) if x),
+        "year": year, "make": make, "model": model, "trim": trim,
+        "price": to_int(price.group(1)) if price else None,
+        "mileage": to_int(mileage.group(1)) if mileage else None,
+        "city": city, "lat": None, "lng": None,
+        "seller_type": "dealer", "seller_name": dealer_name,
+        "kbb_fair_price": None,
+        "image_url": image.group(1) if image else None,
+        "dom": None, "posted": None,
+    }
+
+
+def fetch_dealers():
+    out = {}
+    for dealer_name, base_url, city in DEALER_SITES:
+        session = requests.Session(impersonate="chrome")
+        before = len(out)
+        for page in range(1, DEALER_MAX_PAGES + 1):
+            try:
+                r = session.get(f"{base_url}/inventory/used",
+                                params={"page": str(page)}, timeout=40)
+                r.raise_for_status()
+            except Exception as e:
+                print(f"  {dealer_name} page {page}: {e}")
+                break
+            time.sleep(DEALER_DELAY_S)
+            marks = list(DEALER_CARD_RE.finditer(r.text))
+            added = 0
+            for i, m in enumerate(marks):
+                end = marks[i + 1].start() if i + 1 < len(marks) else len(r.text)
+                seg = r.text[m.end():end]
+                k = len(out)
+                dealer_parse_card(m.group(1), seg, dealer_name, base_url,
+                                  city, out)
+                added += len(out) - k
+            if added == 0:      # past the last page (or repeated content)
+                break
+        print(f"  {dealer_name}: {len(out) - before} used vehicles")
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------
 # database
 # --------------------------------------------------------------------------
 
@@ -719,6 +813,7 @@ FETCHERS = {
     "carscom": fetch_carscom,
     "carmax": fetch_carmax,
     "edmunds": fetch_edmunds,
+    "dealer": fetch_dealers,
 }
 
 
