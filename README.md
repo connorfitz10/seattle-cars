@@ -45,7 +45,7 @@ pip install -r requirements.txt
 | Cars.com   | newest ~500 daily | New-to-market dealer inventory; overlaps Autotrader heavily, so it isn't swept exhaustively. |
 | Edmunds    | nearest ~600 daily | Distance-sorted stable subset (same cars re-seen daily). Includes Edmunds' own market-value estimate and deal rating. Their bot protection answers only the first request per session, so the fetch uses one session per page. |
 
-| Dealer sites | full sweep daily (~180) | Direct from big local dealerships' own websites (Honda/Toyota of Seattle, Klein Honda — all on the Team Velocity platform, so one parser covers each). Add more stores to `DEALER_SITES` in fetch_listings.py; the two Seattle stores share one inventory pool. |
+| Dealer sites | full sweep daily (~500) | Direct from big local dealerships' own websites: Honda/Toyota of Seattle + Klein Honda (Team Velocity platform), Jerry Smith Chevrolet (Burlington) + Dewey Griffin Subaru (Bellingham) (Dealer eProcess platform, parsed from schema.org JSON-LD with recursive price-band splitting). Add stores to `DEALER_SITES` in fetch_listings.py. Foothills Toyota was evaluated but publishes no prices; Skagit Ford and Blade Chevrolet (Dealer Inspire platform) block automated access. |
 
 (Amazon Autos was evaluated and skipped: its storefront is fully
 JS-rendered with no reachable inventory feed, and the pilot's used

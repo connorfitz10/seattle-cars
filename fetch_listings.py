@@ -75,16 +75,28 @@ EDMUNDS_API = ("https://www.edmunds.com/gateway/api/purchasefunnel/v1/srp/"
 EDMUNDS_PAGES = 30                # nearest ~600 listings per day
 EDMUNDS_DELAY_S = 2.5
 
-# --- local dealership sites (all on the Team Velocity platform, which
-# server-renders its inventory grid — same parser works for each) ---
+# --- local dealership sites, keyed by inventory platform ---
+# teamvelocity: server-rendered grid at /inventory/used?page=N
+# dep (Dealer eProcess): 12 vehicles per page as schema.org JSON-LD, no
+#   working pagination, but price-range filters (&s:pr=1&pr=lo:hi) allow
+#   the same recursive band-splitting used for craigslist.
 DEALER_SITES = [
     # Honda of Seattle and Toyota of Seattle are sister stores sharing one
     # used-inventory pool — one fetch covers both.
-    ("Honda/Toyota of Seattle", "https://www.hondaofseattle.com", "Seattle"),
-    ("Klein Honda", "https://www.kleinhonda.com", "Everett"),
+    ("Honda/Toyota of Seattle", "teamvelocity",
+     "https://www.hondaofseattle.com", "Seattle"),
+    ("Klein Honda", "teamvelocity",
+     "https://www.kleinhonda.com", "Everett"),
+    ("Jerry Smith Chevrolet", "dep",
+     "https://www.jerrysmithchevrolet.com/search/used-burlington-wa/?tp=used",
+     "Burlington"),
+    ("Dewey Griffin Subaru", "dep",
+     "https://www.deweygriffinsubaru.com/search/used-bellingham-wa/?tp=used",
+     "Bellingham"),
 ]
 DEALER_MAX_PAGES = 12
 DEALER_DELAY_S = 0.8
+DEP_PAGE_SIZE = 12
 
 # How many days a listing may go unseen before it is marked inactive, and
 # the minimum fetch size for the sweep to be trusted for deactivation
@@ -606,31 +618,109 @@ def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out):
     }
 
 
+def tv_fetch_dealer(session, dealer_name, base_url, city, out):
+    for page in range(1, DEALER_MAX_PAGES + 1):
+        try:
+            r = session.get(f"{base_url}/inventory/used",
+                            params={"page": str(page)}, timeout=40)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"  {dealer_name} page {page}: {e}")
+            break
+        time.sleep(DEALER_DELAY_S)
+        marks = list(DEALER_CARD_RE.finditer(r.text))
+        added = 0
+        for i, m in enumerate(marks):
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(r.text)
+            seg = r.text[m.end():end]
+            k = len(out)
+            dealer_parse_card(m.group(1), seg, dealer_name, base_url,
+                              city, out)
+            added += len(out) - k
+        if added == 0:      # past the last page (or repeated content)
+            break
+
+
+DEP_LDJSON_RE = re.compile(
+    r'<script type="application/ld\+json">\s*(.*?)\s*</script>', re.S)
+DEP_TOTAL_RE = re.compile(r"([0-9,]+)\s*(?:vehicles found|Results Found)", re.I)
+
+
+def dep_parse_page(html, dealer_name, base_url, city, out):
+    origin = re.match(r"https?://[^/]+", base_url).group(0)
+    for block in DEP_LDJSON_RE.findall(html):
+        try:
+            d = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        items = d.get("@graph", [d]) if isinstance(d, dict) else d
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            vin = it.get("vehicleIdentificationNumber") or it.get("vin")
+            name = it.get("name") or ""
+            if not vin or not name.startswith("Used"):
+                continue        # skip the featured-new-vehicles widget
+            offer = it.get("offers")
+            if isinstance(offer, list):
+                offer = offer[0] if offer else {}
+            offer = offer or {}
+            mileage = it.get("mileageFromOdometer")
+            if isinstance(mileage, dict):
+                mileage = mileage.get("value")
+            brand = it.get("brand") or it.get("manufacturer") or {}
+            make = brand.get("name") if isinstance(brand, dict) else brand
+            images = it.get("image")
+            image = images[0] if isinstance(images, list) and images else images
+            path = offer.get("url") or ""
+            key = f"dealer:{vin}"
+            out[key] = {
+                "key": key, "source": "dealer", "source_id": vin, "vin": vin,
+                "url": origin + path if path.startswith("/") else (path or base_url),
+                "title": name,
+                "year": to_int(it.get("vehicleModelDate") or it.get("releaseDate")),
+                "make": MAKES.get(str(make).lower(), make) if make else None,
+                "model": it.get("model"),
+                "trim": it.get("vehicleConfiguration"),
+                "price": to_int(offer.get("price")),
+                "mileage": to_int(mileage),
+                "city": city, "lat": None, "lng": None,
+                "seller_type": "dealer", "seller_name": dealer_name,
+                "kbb_fair_price": None,
+                "image_url": image if isinstance(image, str) else None,
+                "dom": None, "posted": None,
+            }
+
+
+def dep_fetch_dealer(session, dealer_name, srp_url, city, out, lo=1,
+                     hi=500_000, depth=0):
+    try:
+        r = session.get(f"{srp_url}&s:pr=1&pr={lo}:{hi}", timeout=40)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"  {dealer_name} band {lo}-{hi}: {e}")
+        return
+    time.sleep(DEALER_DELAY_S)
+    m = DEP_TOTAL_RE.search(r.text)
+    total = to_int(m.group(1)) if m else 0
+    dep_parse_page(r.text, dealer_name, srp_url, city, out)
+    if total and total > DEP_PAGE_SIZE and lo < hi and depth < 12:
+        mid = (lo + hi) // 2
+        dep_fetch_dealer(session, dealer_name, srp_url, city, out,
+                         lo, mid, depth + 1)
+        dep_fetch_dealer(session, dealer_name, srp_url, city, out,
+                         mid + 1, hi, depth + 1)
+
+
 def fetch_dealers():
     out = {}
-    for dealer_name, base_url, city in DEALER_SITES:
+    for dealer_name, platform, url, city in DEALER_SITES:
         session = requests.Session(impersonate="chrome")
         before = len(out)
-        for page in range(1, DEALER_MAX_PAGES + 1):
-            try:
-                r = session.get(f"{base_url}/inventory/used",
-                                params={"page": str(page)}, timeout=40)
-                r.raise_for_status()
-            except Exception as e:
-                print(f"  {dealer_name} page {page}: {e}")
-                break
-            time.sleep(DEALER_DELAY_S)
-            marks = list(DEALER_CARD_RE.finditer(r.text))
-            added = 0
-            for i, m in enumerate(marks):
-                end = marks[i + 1].start() if i + 1 < len(marks) else len(r.text)
-                seg = r.text[m.end():end]
-                k = len(out)
-                dealer_parse_card(m.group(1), seg, dealer_name, base_url,
-                                  city, out)
-                added += len(out) - k
-            if added == 0:      # past the last page (or repeated content)
-                break
+        if platform == "teamvelocity":
+            tv_fetch_dealer(session, dealer_name, url, city, out)
+        elif platform == "dep":
+            dep_fetch_dealer(session, dealer_name, url, city, out)
         print(f"  {dealer_name}: {len(out) - before} used vehicles")
     return list(out.values())
 
@@ -799,7 +889,8 @@ def export_json(conn, today):
 
     trends = [dict(r) for r in conn.execute(
         "SELECT * FROM aggregates ORDER BY date")]
-    out = {"updated": today, "region": "Seattle metro (50 mi of 98101)",
+    out = {"updated": today,
+           "region": "Seattle metro (50 mi) + Skagit/Whatcom dealers",
            "listings": listings, "trends": trends}
     JSON_PATH.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
     return len(listings)

@@ -154,7 +154,7 @@ function filtered() {
   const miles = +$('f-miles').value || Infinity;
   const source = $('f-source').value, seller = $('f-seller').value;
   let rows = DATA.listings.filter(l =>
-    (!q || name(l).toLowerCase().includes(q)) &&
+    (!q || `${name(l)} ${l.city || ''} ${l.seller_name || ''}`.toLowerCase().includes(q)) &&
     (!make || l.make === make) &&
     (!model || (l.model || '').toLowerCase().includes(model)) &&
     (l.year || 0) >= ymin &&
