@@ -140,11 +140,16 @@ async function load() {
 }
 
 // Peer-relative value: within each make+model cohort of the current
-// market, fit price = b0 + b1·(miles/10k) + b2·(year−2000) by least
-// squares, then score each car by how far its asking price sits from
-// the cohort's curve at its own mileage and age. This normalizes price
-// against mileage using the market itself, and works for every source
-// (unlike the KBB/market estimates, which only some feeds provide).
+// market, fit log(price) = b0 + b1·(miles/10k) + b2·(year−2000) — i.e.
+// exponential depreciation, which matches how cars actually lose value
+// (steep early, flattening late) where a straight line would flatter
+// near-new and very-high-mileage cars. The fit is made robust with
+// Huber-weighted iterative reweighting, so salvage cars and price typos
+// get down-weighted instead of dragging the curve toward themselves.
+// Each car is then scored by how far its asking price sits from the
+// cohort curve at its own mileage and age; log-scale residuals read
+// directly as percentages. Works for every source (unlike the
+// KBB/market estimates, which only some feeds provide).
 function computePeerValue() {
   const cohorts = {};
   for (const l of DATA.listings) {
@@ -153,31 +158,47 @@ function computePeerValue() {
     const key = (l.make + '|' + l.model).toLowerCase().replace(/[^a-z0-9|]/g, '');
     (cohorts[key] = cohorts[key] || []).push(l);
   }
+  const det = M => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+             - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
+             + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+  const col = (M, i, v) => M.map((r, j) => r.map((c, k) => k === i ? v[j] : c));
+  const median0 = a => { const s = [...a].sort((x, y) => x - y);
+    return s.length ? s[Math.floor(s.length / 2)] : 0; };
+
   for (const group of Object.values(cohorts)) {
     if (group.length < 8) continue;
-    // normal equations for X = [1, miles/10k, year-2000]
-    let n = 0, sm = 0, sy = 0, sp = 0, smm = 0, syy = 0, smy = 0, smp = 0, syp = 0;
-    for (const l of group) {
-      const m = l.mileage / 10000, y = l.year - 2000, p = l.price;
-      n++; sm += m; sy += y; sp += p; smm += m * m; syy += y * y;
-      smy += m * y; smp += m * p; syp += y * p;
+    const X = group.map(l => [l.mileage / 10000, l.year - 2000, Math.log(l.price)]);
+    let w = X.map(() => 1), coef = null;
+    for (let iter = 0; iter < 3; iter++) {
+      // weighted normal equations for [1, miles, age] → log price
+      let n = 0, sm = 0, sy = 0, st = 0, smm = 0, syy = 0, smy = 0, smt = 0, syt = 0;
+      X.forEach(([m, y, t], i) => {
+        const wi = w[i];
+        n += wi; sm += wi * m; sy += wi * y; st += wi * t;
+        smm += wi * m * m; syy += wi * y * y; smy += wi * m * y;
+        smt += wi * m * t; syt += wi * y * t;
+      });
+      const A = [[n, sm, sy], [sm, smm, smy], [sy, smy, syy]], B = [st, smt, syt];
+      const dA = det(A);
+      if (Math.abs(dA) < 1e-9) { coef = null; break; }
+      coef = [det(col(A, 0, B)) / dA, det(col(A, 1, B)) / dA, det(col(A, 2, B)) / dA];
+      // Huber reweighting: scale from the MAD, weight = min(1, 1.345s/|r|)
+      const res = X.map(([m, y, t]) => t - (coef[0] + coef[1] * m + coef[2] * y));
+      const med = median0(res);
+      const s = 1.4826 * median0(res.map(r => Math.abs(r - med)));
+      if (s < 1e-4) break;                  // essentially perfect fit
+      w = res.map(r => Math.min(1, 1.345 * s / Math.abs(r || 1e-9)));
     }
-    const A = [[n, sm, sy], [sm, smm, smy], [sy, smy, syy]], B = [sp, smp, syp];
-    const det = M => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
-               - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
-               + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
-    const dA = det(A);
-    if (Math.abs(dA) < 1e-6) continue;      // no mileage/year variance
-    const col = (M, i, v) => M.map((r, j) => r.map((c, k) => k === i ? v[j] : c));
-    const b0 = det(col(A, 0, B)) / dA, b1 = det(col(A, 1, B)) / dA, b2 = det(col(A, 2, B)) / dA;
-    for (const l of group) {
-      const pred = b0 + b1 * (l.mileage / 10000) + b2 * (l.year - 2000);
-      if (pred > 1500) {
+    if (!coef) continue;
+    group.forEach((l, i) => {
+      const [m, y, t] = X[i];
+      const pred = Math.exp(coef[0] + coef[1] * m + coef[2] * y);
+      if (pred > 1000 && isFinite(pred)) {
         l.peer_pct = Math.round(100 * (l.price - pred) / pred);
         l.peer_est = Math.round(pred / 50) * 50;
         l.peer_n = group.length;
       }
-    }
+    });
   }
 }
 
