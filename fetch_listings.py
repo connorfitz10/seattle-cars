@@ -62,7 +62,8 @@ AT_DELAY_S = 0.5
 
 # --- cars.com ---
 CARSCOM_URL = "https://www.cars.com/shopping/results/"
-CARSCOM_PAGES = 15                # newest ~500 listings per day
+CARSCOM_PAGES = 15                # newest ~500 used listings per day
+CARSCOM_NEW_PAGES = 8             # newest ~280 new listings per day
 CARSCOM_DELAY_S = 0.5
 
 # --- carmax ---
@@ -72,7 +73,8 @@ CARMAX_DELAY_S = 0.3
 # --- edmunds ---
 EDMUNDS_API = ("https://www.edmunds.com/gateway/api/purchasefunnel/v1/srp/"
                "inventory")
-EDMUNDS_PAGES = 30                # nearest ~600 listings per day
+EDMUNDS_PAGES = 30                # nearest ~600 used listings per day
+EDMUNDS_NEW_PAGES = 10            # nearest ~200 new listings per day
 EDMUNDS_DELAY_S = 2.5
 
 # --- local dealership sites, keyed by inventory platform ---
@@ -238,7 +240,7 @@ def cl_parse_items(data, purveyor, out):
             "city": city, "lat": lat, "lng": lng,
             "seller_type": purveyor, "seller_name": None,
             "kbb_fair_price": None, "image_url": image,
-            "dom": None, "posted": posted,
+            "dom": None, "posted": posted, "condition": "used",
         }
 
 
@@ -344,6 +346,8 @@ def at_parse(inv, out):
             "kbb_fair_price": to_int(pricing.get("kbbFppAmount")),
             "image_url": image,
             "dom": to_int(h.get("daysOnSite")), "posted": None,
+            "condition": "new" if str(h.get("title") or "").startswith("New")
+                         else "used",
         }
         added += 1
     return added
@@ -397,47 +401,55 @@ CARSCOM_CARD_RE = re.compile(r'data-vehicle-details="(.*?)"', re.S)
 def fetch_carscom():
     session = requests.Session(impersonate="chrome")
     out = {}
-    for page in range(1, CARSCOM_PAGES + 1):
-        try:
-            r = session.get(CARSCOM_URL, params={
-                "stock_type": "used", "zip": ZIP,
-                "maximum_distance": str(RADIUS),
-                "page_size": "100", "page": str(page),
-                "sort": "listed_at_desc",
-            }, timeout=40)
-            r.raise_for_status()
-        except Exception as e:
-            print(f"  cars.com page {page}: {e}")
-            break
-        time.sleep(CARSCOM_DELAY_S)
-        cards = CARSCOM_CARD_RE.findall(r.text)
-        if not cards:
-            break
-        for raw in cards:
+    sweeps = [("used", CARSCOM_PAGES), ("new", CARSCOM_NEW_PAGES)]
+    for stock_type, pages in sweeps:
+        for page in range(1, pages + 1):
             try:
-                d = json.loads(html_mod.unescape(raw))
-            except json.JSONDecodeError:
-                continue
-            lid = d.get("listingId")
-            if not lid:
-                continue
-            key = f"carscom:{lid}"
-            out[key] = {
-                "key": key, "source": "carscom", "source_id": lid,
-                "vin": d.get("vin"),
-                "url": f"https://www.cars.com/vehicledetail/{lid}/",
-                "title": " ".join(str(x) for x in
-                                  [d.get("year"), d.get("make"), d.get("model"),
-                                   d.get("trim")] if x),
-                "year": to_int(d.get("year")), "make": d.get("make"),
-                "model": d.get("model"), "trim": d.get("trim"),
-                "price": to_int(d.get("price")), "mileage": to_int(d.get("mileage")),
-                "city": None, "lat": None, "lng": None,
-                "seller_type": "dealer", "seller_name": None,
-                "kbb_fair_price": None, "image_url": None,
-                "dom": None, "posted": None,
-            }
+                r = session.get(CARSCOM_URL, params={
+                    "stock_type": stock_type, "zip": ZIP,
+                    "maximum_distance": str(RADIUS),
+                    "page_size": "100", "page": str(page),
+                    "sort": "listed_at_desc",
+                }, timeout=40)
+                r.raise_for_status()
+            except Exception as e:
+                print(f"  cars.com {stock_type} page {page}: {e}")
+                break
+            time.sleep(CARSCOM_DELAY_S)
+            cards = CARSCOM_CARD_RE.findall(r.text)
+            if not cards:
+                break
+            carscom_parse_cards(cards, out)
     return list(out.values())
+
+
+def carscom_parse_cards(cards, out):
+    for raw in cards:
+        try:
+            d = json.loads(html_mod.unescape(raw))
+        except json.JSONDecodeError:
+            continue
+        lid = d.get("listingId")
+        if not lid:
+            continue
+        key = f"carscom:{lid}"
+        out[key] = {
+            "key": key, "source": "carscom", "source_id": lid,
+            "vin": d.get("vin"),
+            "url": f"https://www.cars.com/vehicledetail/{lid}/",
+            "title": " ".join(str(x) for x in
+                              [d.get("year"), d.get("make"), d.get("model"),
+                               d.get("trim")] if x),
+            "year": to_int(d.get("year")), "make": d.get("make"),
+            "model": d.get("model"), "trim": d.get("trim"),
+            "price": to_int(d.get("price")), "mileage": to_int(d.get("mileage")),
+            "city": None, "lat": None, "lng": None,
+            "seller_type": "dealer", "seller_name": None,
+            "kbb_fair_price": None, "image_url": None,
+            "dom": None, "posted": None,
+            "condition": "new" if str(d.get("stockType", "")).lower() == "new"
+                         else "used",
+        }
 
 
 # --------------------------------------------------------------------------
@@ -484,7 +496,7 @@ def fetch_carmax():
                 "kbb_fair_price": None,
                 "image_url": h.get("heroImageUrl")
                              or f"https://img2.carmax.com/assets/{stock}/hero.jpg?width=320",
-                "dom": None, "posted": None,
+                "dom": None, "posted": None, "condition": "used",
             }
         skip += 100
     return list(out.values())
@@ -502,67 +514,80 @@ def fetch_edmunds():
     Includes Edmunds' own market-value estimate and deal rating."""
     today_ms = time.time() * 1000
     out = {}
-    for page in range(1, EDMUNDS_PAGES + 1):
-        results = None
-        for attempt in (1, 2):
-            session = requests.Session(impersonate="chrome")
-            try:
-                r = session.get(EDMUNDS_API, params={
-                    # NB: this endpoint silently ignores lowercase param
-                    # names on paged requests (serving NEW cars) — the
-                    # camelCase spellings are the ones that stick.
-                    "zip": ZIP, "radius": str(RADIUS),
-                    "inventoryType": "used,cpo",
-                    "pageNum": str(page), "pagesize": "20",
-                }, timeout=30, headers={
-                    "Referer": "https://www.edmunds.com/inventory/srp.html"})
-                r.raise_for_status()
-                results = r.json().get("inventories", {}).get("results") or []
-                if results:
-                    break
-            except Exception as e:
-                if attempt == 2:
-                    print(f"  edmunds page {page}: {e}")
-            time.sleep(3)
-        if not results:
-            print(f"  edmunds stopped at page {page} (empty response twice)")
-            break
-        for h in results:
-            vin = h.get("vin")
-            if not vin:
-                continue
-            vi = h.get("vehicleInfo") or {}
-            si = vi.get("styleInfo") or {}
-            prices = h.get("prices") or {}
-            pv = (h.get("thirdPartyInfo") or {}).get("priceValidation") or {}
-            dealer = h.get("dealerInfo") or {}
-            addr = dealer.get("address") or {}
-            listed = h.get("listedSince")
-            dom = (int((today_ms - listed) / 86_400_000)
-                   if isinstance(listed, (int, float)) and listed > 0 else None)
-            make, model, year = si.get("make"), si.get("model"), si.get("year")
-            slug = "/".join(str(x).lower().replace(" ", "-")
-                            for x in (make, model, year) if x)
-            key = f"edmunds:{vin}"
-            out[key] = {
-                "key": key, "source": "edmunds", "source_id": vin, "vin": vin,
-                "url": f"https://www.edmunds.com/{slug}/vin/{vin}/" if slug else None,
-                "title": None,
-                "year": to_int(year), "make": make, "model": model,
-                "trim": si.get("trim"),
-                "price": to_int(prices.get("displayPrice")
-                                or prices.get("advertisedPrice")),
-                "mileage": to_int(vi.get("mileage")),
-                "city": addr.get("city"), "lat": None, "lng": None,
-                "seller_type": "owner" if h.get("isPrivateParty") else "dealer",
-                "seller_name": (dealer.get("displayInfo") or {}).get(
-                    "parentDealershipName"),
-                "kbb_fair_price": to_int(pv.get("listPriceEstimate")),
-                "image_url": None,
-                "dom": dom, "posted": None,
-            }
-        time.sleep(EDMUNDS_DELAY_S)
+    sweeps = [("used,cpo", EDMUNDS_PAGES), ("new", EDMUNDS_NEW_PAGES)]
+    for inventory_type, pages in sweeps:
+        for page in range(1, pages + 1):
+            results = None
+            # rate-limit flags clear after ~45s and are fingerprint-
+            # sensitive, so retries escalate the backoff and rotate the
+            # impersonated browser
+            for attempt, (fingerprint, backoff) in enumerate(
+                    [("chrome", 3), ("safari", 45), ("safari_ios", 60)], 1):
+                session = requests.Session(impersonate=fingerprint)
+                try:
+                    r = session.get(EDMUNDS_API, params={
+                        # NB: this endpoint silently ignores lowercase param
+                        # names on paged requests (serving NEW cars) — the
+                        # camelCase spellings are the ones that stick.
+                        "zip": ZIP, "radius": str(RADIUS),
+                        "inventoryType": inventory_type,
+                        "pageNum": str(page), "pagesize": "20",
+                    }, timeout=30, headers={
+                        "Referer": "https://www.edmunds.com/inventory/srp.html"})
+                    r.raise_for_status()
+                    results = r.json().get("inventories", {}).get("results") or []
+                    if results:
+                        break
+                except Exception as e:
+                    if attempt == 3:
+                        print(f"  edmunds {inventory_type} page {page}: {e}")
+                time.sleep(backoff)
+            if not results:
+                print(f"  edmunds {inventory_type} stopped at page {page} "
+                      "(empty response twice)")
+                break
+            edmunds_parse_results(results, today_ms, out)
+            time.sleep(EDMUNDS_DELAY_S)
     return list(out.values())
+
+
+def edmunds_parse_results(results, today_ms, out):
+    for h in results:
+        vin = h.get("vin")
+        if not vin:
+            continue
+        vi = h.get("vehicleInfo") or {}
+        si = vi.get("styleInfo") or {}
+        prices = h.get("prices") or {}
+        pv = (h.get("thirdPartyInfo") or {}).get("priceValidation") or {}
+        dealer = h.get("dealerInfo") or {}
+        addr = dealer.get("address") or {}
+        listed = h.get("listedSince")
+        dom = (int((today_ms - listed) / 86_400_000)
+               if isinstance(listed, (int, float)) and listed > 0 else None)
+        make, model, year = si.get("make"), si.get("model"), si.get("year")
+        slug = "/".join(str(x).lower().replace(" ", "-")
+                        for x in (make, model, year) if x)
+        key = f"edmunds:{vin}"
+        out[key] = {
+            "key": key, "source": "edmunds", "source_id": vin, "vin": vin,
+            "url": f"https://www.edmunds.com/{slug}/vin/{vin}/" if slug else None,
+            "title": None,
+            "year": to_int(year), "make": make, "model": model,
+            "trim": si.get("trim"),
+            "price": to_int(prices.get("displayPrice")
+                            or prices.get("advertisedPrice")),
+            "mileage": to_int(vi.get("mileage")),
+            "city": addr.get("city"), "lat": None, "lng": None,
+            "seller_type": "owner" if h.get("isPrivateParty") else "dealer",
+            "seller_name": (dealer.get("displayInfo") or {}).get(
+                "parentDealershipName"),
+            "kbb_fair_price": to_int(pv.get("listPriceEstimate")),
+            "image_url": None,
+            "dom": dom, "posted": None,
+            "condition": "new" if str(h.get("type", "")).upper() == "NEW"
+                         else "used",
+        }
 
 
 # --------------------------------------------------------------------------
@@ -573,7 +598,8 @@ DEALER_CARD_RE = re.compile(r'data-itemid="([^"]+)"')
 DEALER_VIN_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 
 
-def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out):
+def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out,
+                      condition="used"):
     parts = itemid.rsplit("-", 1)
     if len(parts) != 2 or not DEALER_VIN_RE.match(parts[1]):
         return
@@ -594,12 +620,20 @@ def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out):
     ym = re.search(r"/viewdetails/[^/]+/[^/]+/((?:19|20)\d{2})-", url)
     if ym:
         year = int(ym.group(1))
-    price = re.search(r"\$\s*([\d,]{4,})", segment)
+    # cards carry both a "Selling Price" and a doc-fee-inclusive
+    # "No-Haggle, Upfront Price"; parse the selling price (the basis the
+    # aggregators list) so the tracked price is stable. (Sic: the site
+    # spells it "Sellng".)
+    price = (re.search(r"Sell\w*g\s+Price[^$]{0,80}\$\s*([\d,]{4,})", segment)
+             or re.search(r"\$\s*([\d,]{4,})", segment))
     mileage = (re.search(r'details-item-label">\s*Mileage\s*</div>\s*'
                          r'<div class="details-item-value">\s*([\d,]+)', segment)
                or re.search(r'"mileageFromOdometer"[^}]*?"value":\s*"?([\d,]+)',
-                            segment)
-               or re.search(r"([\d,]{4,})\s*Miles\b", segment))
+                            segment))
+    if mileage is None and condition != "new":
+        # loose fallback; unsafe on new-car cards, whose only "N Miles"
+        # text is the powertrain warranty
+        mileage = re.search(r"([\d,]{4,})\s*Miles\b", segment)
     image = re.search(r'(https://content\.homenetiol\.com/[^"\s]+?\.(?:jpg|png|webp))',
                       segment)
     key = f"dealer:{vin}"
@@ -614,14 +648,15 @@ def dealer_parse_card(itemid, segment, dealer_name, base_url, city, out):
         "seller_type": "dealer", "seller_name": dealer_name,
         "kbb_fair_price": None,
         "image_url": image.group(1) if image else None,
-        "dom": None, "posted": None,
+        "dom": None, "posted": None, "condition": condition,
     }
 
 
-def tv_fetch_dealer(session, dealer_name, base_url, city, out):
+def tv_fetch_dealer(session, dealer_name, base_url, city, out,
+                    condition="used"):
     for page in range(1, DEALER_MAX_PAGES + 1):
         try:
-            r = session.get(f"{base_url}/inventory/used",
+            r = session.get(f"{base_url}/inventory/{condition}",
                             params={"page": str(page)}, timeout=40)
             r.raise_for_status()
         except Exception as e:
@@ -635,7 +670,7 @@ def tv_fetch_dealer(session, dealer_name, base_url, city, out):
             seg = r.text[m.end():end]
             k = len(out)
             dealer_parse_card(m.group(1), seg, dealer_name, base_url,
-                              city, out)
+                              city, out, condition)
             added += len(out) - k
         if added == 0:      # past the last page (or repeated content)
             break
@@ -646,8 +681,9 @@ DEP_LDJSON_RE = re.compile(
 DEP_TOTAL_RE = re.compile(r"([0-9,]+)\s*(?:vehicles found|Results Found)", re.I)
 
 
-def dep_parse_page(html, dealer_name, base_url, city, out):
+def dep_parse_page(html, dealer_name, base_url, city, out, condition="used"):
     origin = re.match(r"https?://[^/]+", base_url).group(0)
+    prefix = "New" if condition == "new" else "Used"
     for block in DEP_LDJSON_RE.findall(html):
         try:
             d = json.loads(block)
@@ -659,8 +695,10 @@ def dep_parse_page(html, dealer_name, base_url, city, out):
                 continue
             vin = it.get("vehicleIdentificationNumber") or it.get("vin")
             name = it.get("name") or ""
-            if not vin or not name.startswith("Used"):
-                continue        # skip the featured-new-vehicles widget
+            # the prefix check also skips the featured-vehicles widget,
+            # which lists cars of the other condition without offers
+            if not vin or not name.startswith(prefix):
+                continue
             offer = it.get("offers")
             if isinstance(offer, list):
                 offer = offer[0] if offer else {}
@@ -688,12 +726,12 @@ def dep_parse_page(html, dealer_name, base_url, city, out):
                 "seller_type": "dealer", "seller_name": dealer_name,
                 "kbb_fair_price": None,
                 "image_url": image if isinstance(image, str) else None,
-                "dom": None, "posted": None,
+                "dom": None, "posted": None, "condition": condition,
             }
 
 
-def dep_fetch_dealer(session, dealer_name, srp_url, city, out, lo=1,
-                     hi=500_000, depth=0):
+def dep_fetch_dealer(session, dealer_name, srp_url, city, out,
+                     condition="used", lo=1, hi=500_000, depth=0):
     try:
         r = session.get(f"{srp_url}&s:pr=1&pr={lo}:{hi}", timeout=40)
         r.raise_for_status()
@@ -703,13 +741,13 @@ def dep_fetch_dealer(session, dealer_name, srp_url, city, out, lo=1,
     time.sleep(DEALER_DELAY_S)
     m = DEP_TOTAL_RE.search(r.text)
     total = to_int(m.group(1)) if m else 0
-    dep_parse_page(r.text, dealer_name, srp_url, city, out)
+    dep_parse_page(r.text, dealer_name, srp_url, city, out, condition)
     if total and total > DEP_PAGE_SIZE and lo < hi and depth < 12:
         mid = (lo + hi) // 2
         dep_fetch_dealer(session, dealer_name, srp_url, city, out,
-                         lo, mid, depth + 1)
+                         condition, lo, mid, depth + 1)
         dep_fetch_dealer(session, dealer_name, srp_url, city, out,
-                         mid + 1, hi, depth + 1)
+                         condition, mid + 1, hi, depth + 1)
 
 
 def fetch_dealers():
@@ -717,11 +755,15 @@ def fetch_dealers():
     for dealer_name, platform, url, city in DEALER_SITES:
         session = requests.Session(impersonate="chrome")
         before = len(out)
-        if platform == "teamvelocity":
-            tv_fetch_dealer(session, dealer_name, url, city, out)
-        elif platform == "dep":
-            dep_fetch_dealer(session, dealer_name, url, city, out)
-        print(f"  {dealer_name}: {len(out) - before} used vehicles")
+        for condition in ("used", "new"):
+            if platform == "teamvelocity":
+                tv_fetch_dealer(session, dealer_name, url, city, out,
+                                condition)
+            elif platform == "dep":
+                dep_fetch_dealer(session, dealer_name,
+                                 url.replace("tp=used", f"tp={condition}"),
+                                 city, out, condition)
+        print(f"  {dealer_name}: {len(out) - before} vehicles")
     return list(out.values())
 
 
@@ -756,7 +798,8 @@ def init_db(conn):
             posted         TEXT,
             first_seen     TEXT,
             last_seen      TEXT,
-            active         INTEGER DEFAULT 1
+            active         INTEGER DEFAULT 1,
+            condition      TEXT DEFAULT 'used'
         );
         CREATE TABLE IF NOT EXISTS price_history (
             key   TEXT,
@@ -776,11 +819,18 @@ def init_db(conn):
         CREATE INDEX IF NOT EXISTS idx_listings_vin ON listings(vin);
         CREATE INDEX IF NOT EXISTS idx_listings_active ON listings(source, active);
     """)
+    # condition column added after initial schema; migrate older databases.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(listings)")}
+    if "condition" not in cols:
+        conn.execute("ALTER TABLE listings ADD COLUMN condition TEXT DEFAULT 'used'")
+        # the autotrader sweep always covered new cars too; backfill them
+        conn.execute("UPDATE listings SET condition='new' "
+                     "WHERE source='autotrader' AND title LIKE 'New %'")
 
 
 UPDATE_COLS = ["vin", "url", "title", "year", "make", "model", "trim", "price",
                "mileage", "city", "lat", "lng", "seller_type", "seller_name",
-               "kbb_fair_price", "image_url", "dom", "posted"]
+               "kbb_fair_price", "image_url", "dom", "posted", "condition"]
 
 
 def upsert(conn, rows, today):
@@ -836,8 +886,12 @@ def deactivate(conn, source, fetched_count, today):
 
 
 def record_aggregates(conn, today, new_by_source, drops_by_source):
+    # trend series stay used-cars-only, both for continuity with data
+    # recorded before new-car tracking and because that's the market
+    # being tracked; new-car counts are visible in the dashboard filters.
     rows = conn.execute(
-        "SELECT source, price FROM listings WHERE active = 1").fetchall()
+        "SELECT source, price FROM listings WHERE active = 1 "
+        "AND (condition IS NULL OR condition != 'new')").fetchall()
     by_source = {}
     for source, price in rows:
         by_source.setdefault(source, []).append(price)
@@ -884,6 +938,8 @@ def export_json(conn, today):
             d.pop(drop, None)
         if d["source"] != "craigslist" and d.get("year"):
             d.pop("title", None)          # reconstructable from year/make/model
+        if d.get("condition") != "new":
+            d.pop("condition", None)      # 'used' is the dashboard default
         listings.append({k: v for k, v in d.items()
                          if v is not None and v != 0 or k == "price_drop"})
 
