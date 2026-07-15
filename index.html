@@ -60,11 +60,6 @@
   aside h3 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
   .chart-note { font-size: .7rem; color: var(--muted); margin: 4px 0 12px; }
   aside svg { width: 100%; height: auto; }
-  .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .72rem; color: var(--muted); margin: 4px 0 12px; }
-  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
-  .makebar { display: flex; align-items: center; gap: 8px; font-size: .78rem; margin: 3px 0; }
-  .makebar .bar { height: 10px; background: var(--accent); border-radius: 3px; opacity: .75; }
-  .makebar .n { color: var(--muted); }
   .empty { padding: 40px; color: var(--muted); text-align: center; grid-column: 1/-1; }
   .more { grid-column: 1/-1; text-align: center; padding: 8px 0 20px; }
   .more button { padding: 9px 22px; border: 1px solid var(--border); border-radius: 999px; background: #fff; cursor: pointer; font-size: .85rem; }
@@ -97,6 +92,7 @@
     <option value="price-desc">Price ↓</option>
     <option value="drop-desc">Biggest price drop</option>
     <option value="miles-asc">Mileage ↑</option>
+    <option value="peers-asc">Best value vs peers</option>
     <option value="kbb-asc">$ vs KBB ↑</option>
     <option value="year-desc">Year ↓</option>
   </select></div>
@@ -114,15 +110,11 @@
   <aside>
     <h3>Median asking price <small>(current view)</small></h3>
     <svg id="chart-price" viewBox="0 0 320 130"></svg>
-    <h3>Listings on market <small>(current view)</small></h3>
-    <svg id="chart-count" viewBox="0 0 320 130"></svg>
-    <p class="chart-note">Both charts follow the filters and tab above, reconstructed from the price history of cars currently on the market.</p>
-    <h3>Top makes (current view)</h3>
-    <div id="makes"></div>
+    <p class="chart-note">Follows the filters and tab above, reconstructed from the price history of cars currently on the market.</p>
   </aside>
 </main>
 
-<p class="disclaimer">Data gathered from publicly visible listings on Craigslist, Autotrader, Cars.com and CarMax for personal use; all listing content belongs to its respective source. Autotrader and Cars.com are sampled rather than exhaustive, so market totals are indicative, not census counts. Not affiliated with any listed site. Verify all details on the listing page before making decisions.</p>
+<p class="disclaimer">Data gathered from publicly visible listings on Craigslist, Autotrader, Cars.com and CarMax for personal use; all listing content belongs to its respective source. Autotrader and Cars.com are sampled rather than exhaustive, so market totals are indicative, not census counts. Not affiliated with any listed site. "Below peers" compares against other current listings of the same make and model, adjusted for mileage and year — a car far below its peers often has a reason (salvage title, damage, scam); always verify details on the listing page before making decisions.</p>
 
 <script>
 let DATA = null, TAB = 'all', LIMIT = 240;
@@ -143,12 +135,60 @@ async function load() {
   $('updated').textContent = `Updated ${DATA.updated} · ${DATA.region} · ${DATA.listings.length.toLocaleString()} active listings`;
   const makes = [...new Set(DATA.listings.map(l => l.make).filter(Boolean))].sort();
   for (const m of makes) $('f-make').add(new Option(m, m));
+  computePeerValue();
   render();
+}
+
+// Peer-relative value: within each make+model cohort of the current
+// market, fit price = b0 + b1·(miles/10k) + b2·(year−2000) by least
+// squares, then score each car by how far its asking price sits from
+// the cohort's curve at its own mileage and age. This normalizes price
+// against mileage using the market itself, and works for every source
+// (unlike the KBB/market estimates, which only some feeds provide).
+function computePeerValue() {
+  const cohorts = {};
+  for (const l of DATA.listings) {
+    if ((l.condition || 'used') !== 'used' || !l.make || !l.model ||
+        !l.year || l.mileage == null || !(l.price >= 1500)) continue;
+    const key = (l.make + '|' + l.model).toLowerCase().replace(/[^a-z0-9|]/g, '');
+    (cohorts[key] = cohorts[key] || []).push(l);
+  }
+  for (const group of Object.values(cohorts)) {
+    if (group.length < 8) continue;
+    // normal equations for X = [1, miles/10k, year-2000]
+    let n = 0, sm = 0, sy = 0, sp = 0, smm = 0, syy = 0, smy = 0, smp = 0, syp = 0;
+    for (const l of group) {
+      const m = l.mileage / 10000, y = l.year - 2000, p = l.price;
+      n++; sm += m; sy += y; sp += p; smm += m * m; syy += y * y;
+      smy += m * y; smp += m * p; syp += y * p;
+    }
+    const A = [[n, sm, sy], [sm, smm, smy], [sy, smy, syy]], B = [sp, smp, syp];
+    const det = M => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+               - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
+               + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+    const dA = det(A);
+    if (Math.abs(dA) < 1e-6) continue;      // no mileage/year variance
+    const col = (M, i, v) => M.map((r, j) => r.map((c, k) => k === i ? v[j] : c));
+    const b0 = det(col(A, 0, B)) / dA, b1 = det(col(A, 1, B)) / dA, b2 = det(col(A, 2, B)) / dA;
+    for (const l of group) {
+      const pred = b0 + b1 * (l.mileage / 10000) + b2 * (l.year - 2000);
+      if (pred > 1500) {
+        l.peer_pct = Math.round(100 * (l.price - pred) / pred);
+        l.peer_est = Math.round(pred / 50) * 50;
+        l.peer_n = group.length;
+      }
+    }
+  }
 }
 
 const name = l => l.title || [l.year, l.make, l.model, l.trim].filter(Boolean).join(' ');
 const isNew = l => l.dom != null ? l.dom <= 3 : (l.posted ? daysAgo(l.posted) <= 3 : daysAgo(l.first_seen) <= 3);
-const isDeal = l => l.vs_kbb_pct != null && l.vs_kbb_pct <= 95;
+// a deal: at most 95% of the source's fair-value estimate, or 20%+ below
+// the peer curve — residual scatter within a model is wide (quartiles sit
+// near ±10%), so anything less is noise. Capped: 70%+ "below market" is
+// usually salvage or a typo.
+const isPeerDeal = l => l.peer_pct != null && l.peer_pct <= -20 && l.peer_pct >= -70;
+const isDeal = l => (l.vs_kbb_pct != null && l.vs_kbb_pct <= 95) || isPeerDeal(l);
 
 function filtered() {
   const q = $('f-q').value.trim().toLowerCase();
@@ -180,6 +220,7 @@ function filtered() {
     'price-desc': (a, b) => (b.price ?? 0) - (a.price ?? 0),
     'drop-desc':  (a, b) => (b.price_drop_pct || 0) - (a.price_drop_pct || 0),
     'miles-asc':  (a, b) => (a.mileage ?? 9e9) - (b.mileage ?? 9e9),
+    'peers-asc':  (a, b) => (Math.max(a.peer_pct ?? 9e9, -70)) - (Math.max(b.peer_pct ?? 9e9, -70)),
     'kbb-asc':    (a, b) => (a.vs_kbb_pct ?? 9e9) - (b.vs_kbb_pct ?? 9e9),
     'year-desc':  (a, b) => (b.year ?? 0) - (a.year ?? 0),
   }[$('f-sort').value];
@@ -207,7 +248,6 @@ function render() {
   $('grid').innerHTML = (shown.length ? shown.map(card).join('') :
     '<div class="empty">No listings match these filters.</div>') +
     (rows.length > LIMIT ? `<div class="more"><button onclick="LIMIT+=240;render()">Show more (${(rows.length - LIMIT).toLocaleString()} remaining)</button></div>` : '');
-  drawMakes(rows);
   drawTrends(rows);
 }
 
@@ -223,7 +263,8 @@ function card(l) {
     </div>
     <div class="badges">
       ${l.price_drop > 0 ? `<span class="badge drop">▼ ${fmt$(l.price_drop)}</span>` : ''}
-      ${isDeal(l) ? `<span class="badge deal">${l.vs_kbb_pct}% of ${l.source === 'edmunds' ? 'mkt est.' : 'KBB'}</span>` : ''}
+      ${l.vs_kbb_pct != null && l.vs_kbb_pct <= 95 ? `<span class="badge deal">${l.vs_kbb_pct}% of ${l.source === 'edmunds' ? 'mkt est.' : 'KBB'}</span>` : ''}
+      ${isPeerDeal(l) ? `<span class="badge deal" title="vs ${l.peer_n} similar listings">${-l.peer_pct}% below peers</span>` : ''}
       ${l.condition === 'new' ? '<span class="badge newcar">NEW CAR</span>' : ''}
       ${isNew(l) ? '<span class="badge new">JUST LISTED</span>' : ''}
       <span class="badge src" style="background:${srcColor}">${srcName}</span>
@@ -239,6 +280,7 @@ function card(l) {
       </div>
       <div class="facts">
         ${l.kbb_fair_price ? `<span>${FAIR[l.source] || 'Fair'} <b>${fmt$(l.kbb_fair_price)}</b></span>` : ''}
+        ${l.peer_est ? `<span title="${l.peer_n} similar listings, adjusted for miles and year">Peers ≈ <b>${fmt$(l.peer_est)}</b></span>` : ''}
         ${l.dom != null ? `<span><b>${l.dom}</b>d listed</span>` : (l.posted ? `<span>posted <b>${esc(l.posted)}</b></span>` : '')}
         ${l.seller_name && l.source !== 'autotrader' ? `<span>${esc(l.seller_name)}</span>` : ''}
       </div>
@@ -253,16 +295,6 @@ function toggleFav(key, btn) {
   localStorage.setItem('seacars-favs', JSON.stringify([...favs]));
   btn.classList.toggle('on');
   if (TAB === 'favs') render();
-}
-
-function drawMakes(rows) {
-  const counts = {};
-  for (const l of rows) if (l.make) counts[l.make] = (counts[l.make] || 0) + 1;
-  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12);
-  const max = top[0]?.[1] || 1;
-  $('makes').innerHTML = top.map(([m, n]) =>
-    `<div class="makebar"><span style="width:86px">${esc(m)}</span>
-     <div class="bar" style="width:${Math.round(120 * n / max)}px"></div><span class="n">${n.toLocaleString()}</span></div>`).join('');
 }
 
 // Rebuild trend lines for the rows matching the current filters. Only
@@ -281,15 +313,13 @@ function drawTrends(rows) {
     }
     return p;
   };
-  const medians = [], counts = [];
+  const medians = [];
   for (const d of dates) {
     const alive = rows.filter(l => (l.first_seen || '9999') <= d);
-    counts.push(alive.length);
     medians.push(median(alive.map(l => priceAt(l, d)).filter(p => p >= 500)));
   }
   drawChart('chart-price', dates, medians,
     v => '$' + (v >= 100000 ? fmtK(v) : Math.round(v).toLocaleString()));
-  drawChart('chart-count', dates, counts, v => fmtK(v));
 }
 
 function drawChart(id, dates, vals, fmt) {
