@@ -57,6 +57,8 @@
   .history { font-size: .74rem; margin-top: 6px; color: var(--drop); }
   aside { border-left: 1px solid var(--border); background: var(--card); padding: 16px 18px; position: sticky; top: 61px; height: calc(100vh - 61px); overflow-y: auto; }
   aside h3 { margin: 8px 0 6px; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  aside h3 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .chart-note { font-size: .7rem; color: var(--muted); margin: 4px 0 12px; }
   aside svg { width: 100%; height: auto; }
   .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .72rem; color: var(--muted); margin: 4px 0 12px; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
@@ -110,11 +112,11 @@
 <main>
   <div class="grid" id="grid"></div>
   <aside>
-    <h3>Median asking price</h3>
+    <h3>Median asking price <small>(current view)</small></h3>
     <svg id="chart-price" viewBox="0 0 320 130"></svg>
-    <h3>Active listings tracked</h3>
+    <h3>Listings on market <small>(current view)</small></h3>
     <svg id="chart-count" viewBox="0 0 320 130"></svg>
-    <div class="legend" id="legend"></div>
+    <p class="chart-note">Both charts follow the filters and tab above, reconstructed from the price history of cars currently on the market.</p>
     <h3>Top makes (current view)</h3>
     <div id="makes"></div>
   </aside>
@@ -142,7 +144,6 @@ async function load() {
   const makes = [...new Set(DATA.listings.map(l => l.make).filter(Boolean))].sort();
   for (const m of makes) $('f-make').add(new Option(m, m));
   render();
-  drawTrends();
 }
 
 const name = l => l.title || [l.year, l.make, l.model, l.trim].filter(Boolean).join(' ');
@@ -207,6 +208,7 @@ function render() {
     '<div class="empty">No listings match these filters.</div>') +
     (rows.length > LIMIT ? `<div class="more"><button onclick="LIMIT+=240;render()">Show more (${(rows.length - LIMIT).toLocaleString()} remaining)</button></div>` : '');
   drawMakes(rows);
+  drawTrends(rows);
 }
 
 function card(l) {
@@ -263,37 +265,49 @@ function drawMakes(rows) {
      <div class="bar" style="width:${Math.round(120 * n / max)}px"></div><span class="n">${n.toLocaleString()}</span></div>`).join('');
 }
 
-function drawTrends() {
-  const bySrc = {};
-  for (const t of DATA.trends) (bySrc[t.source] = bySrc[t.source] || []).push(t);
+// Rebuild trend lines for the rows matching the current filters. Only
+// currently listed cars are exported, so this is the history *of today's
+// market*: for each fetch date, a car counts once it was first seen, at
+// whatever price its history shows for that date.
+function drawTrends(rows) {
   const dates = [...new Set(DATA.trends.map(t => t.date))].sort();
-  drawChart('chart-price', bySrc, dates, t => t.median_price, v => '$' + fmtK(v));
-  drawChart('chart-count', bySrc, dates, t => t.active, v => fmtK(v));
-  $('legend').innerHTML = Object.keys(bySrc).map(s => {
-    const [n, c] = s === 'all' ? ['All sources', 'var(--ink)'] : (SRC[s] || [s, '#888']);
-    return `<span><i style="background:${c}"></i>${n}</span>`;
-  }).join('');
+  if (!dates.length) dates.push(DATA.updated);
+  const priceAt = (l, d) => {
+    let p = l.price;                       // constant if no history
+    if (l.price_history) {
+      p = null;
+      for (const h of l.price_history) { if (h.date <= d) p = h.price; else break; }
+      p = p ?? l.original_price ?? l.price;
+    }
+    return p;
+  };
+  const medians = [], counts = [];
+  for (const d of dates) {
+    const alive = rows.filter(l => (l.first_seen || '9999') <= d);
+    counts.push(alive.length);
+    medians.push(median(alive.map(l => priceAt(l, d)).filter(p => p >= 500)));
+  }
+  drawChart('chart-price', dates, medians,
+    v => '$' + (v >= 100000 ? fmtK(v) : Math.round(v).toLocaleString()));
+  drawChart('chart-count', dates, counts, v => fmtK(v));
 }
 
-function drawChart(id, bySrc, dates, val, fmt) {
+function drawChart(id, dates, vals, fmt) {
   const W = 320, H = 130, P = { l: 40, r: 6, t: 8, b: 18 };
-  const all = DATA.trends.map(val).filter(v => v != null);
-  if (!all.length || !dates.length) { $(id).innerHTML = ''; return; }
-  let lo = Math.min(...all), hi = Math.max(...all);
-  if (lo === hi) { lo *= 0.9; hi *= 1.1; }
-  const x = d => dates.length === 1 ? (P.l + W - P.r) / 2 : P.l + (W - P.l - P.r) * dates.indexOf(d) / (dates.length - 1);
+  const real = vals.filter(v => v != null);
+  if (!real.length) { $(id).innerHTML = '<text x="8" y="20" font-size="10" fill="#6b7280">No data for this view.</text>'; return; }
+  let lo = Math.min(...real), hi = Math.max(...real);
+  if (lo === hi) { lo = lo * 0.9 - 1; hi = hi * 1.1 + 1; }
+  const x = i => dates.length === 1 ? (P.l + W - P.r) / 2 : P.l + (W - P.l - P.r) * i / (dates.length - 1);
   const y = v => H - P.b - (H - P.t - P.b) * (v - lo) / (hi - lo);
   let out = `<line x1="${P.l}" y1="${H - P.b}" x2="${W - P.r}" y2="${H - P.b}" stroke="#e5e7eb"/>`;
   out += `<text x="2" y="${y(hi) + 4}" font-size="9" fill="#6b7280">${fmt(hi)}</text>`;
   out += `<text x="2" y="${y(lo) + 4}" font-size="9" fill="#6b7280">${fmt(lo)}</text>`;
   out += `<text x="${P.l}" y="${H - 4}" font-size="9" fill="#6b7280">${dates[0].slice(5)}</text>`;
   if (dates.length > 1) out += `<text x="${W - P.r}" y="${H - 4}" font-size="9" fill="#6b7280" text-anchor="end">${dates[dates.length - 1].slice(5)}</text>`;
-  for (const [s, rows] of Object.entries(bySrc)) {
-    const color = s === 'all' ? '#1f2937' : ({ craigslist: '#7c3aed', autotrader: '#ea580c', carscom: '#2563eb', carmax: '#ca8a04', edmunds: '#16a34a', dealer: '#db2777' }[s] || '#888');
-    const pts = rows.filter(t => val(t) != null).map(t => `${x(t.date).toFixed(1)},${y(val(t)).toFixed(1)}`);
-    if (pts.length > 1) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="${s === 'all' ? 2 : 1.2}"/>`;
-    for (const p of pts) out += `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2" fill="${color}"/>`;
-  }
+  const pts = vals.map((v, i) => v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean);
+  if (pts.length > 1) out += `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  for (const p of pts) out += `<circle cx="${p.split(',')[0]}" cy="${p.split(',')[1]}" r="2.5" fill="var(--accent)"/>`;
   $(id).innerHTML = out;
 }
 
