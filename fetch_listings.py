@@ -95,6 +95,36 @@ DEALER_SITES = [
     ("Dewey Griffin Subaru", "dep",
      "https://www.deweygriffinsubaru.com/search/used-bellingham-wa/?tp=used",
      "Bellingham"),
+    # Foothills shows no prices on its site's search grid, but real prices
+    # ride along in the same schema.org JSON-LD the parser already reads.
+    ("Foothills Toyota", "dep",
+     "https://www.foothillstoyota.com/search/used-foothills-toyota-burlington-wa/?cy=98233&lc=97&tp=used",
+     "Burlington"),
+    ("Dwayne Lane's Auto Family", "dep",
+     "https://www.dwaynelane.com/search/used/?tp=used",
+     "Everett/Arlington"),
+    # separate store site; its inventory is NOT in the dwaynelane.com sweep
+    ("Dwayne Lane's Skagit Subaru", "dep",
+     "https://www.dwaynelaneskagitsubaru.com/search/used/?tp=used",
+     "Burlington"),
+    ("Honda of Burlington", "teamvelocity",
+     "https://hondaburlington.com", "Burlington"),
+    ("Lynnwood Honda", "teamvelocity",
+     "https://www.lynnwoodhonda.com", "Lynnwood"),
+    ("Carter Volkswagen", "dep",
+     "https://www.cartervw.com/search/used/?tp=used", "Seattle"),
+    ("Carter Acura of Lynnwood", "dep",
+     "https://www.carteracura.com/search/used/?tp=used", "Lynnwood"),
+    ("Doug's Family Dealerships", "dep",
+     "https://www.dougs.com/search/used/?tp=used", "Lynnwood"),
+    ("Rodland Toyota", "dep",
+     "https://www.rodlandtoyota.com/search/used/?tp=used", "Everett"),
+    ("Volkswagen of Bellingham", "dealeron",
+     "https://www.volkswagenofbellingham.com", "Bellingham"),
+    ("Magic Toyota", "dealeron",
+     "https://www.magictoyota.com", "Edmonds"),
+    ("Toyota of Lake City", "dealeron",
+     "https://www.toyotaoflakecity.com", "Seattle"),
 ]
 DEALER_MAX_PAGES = 12
 DEALER_DELAY_S = 0.8
@@ -750,6 +780,74 @@ def dep_fetch_dealer(session, dealer_name, srp_url, city, out,
                          condition, mid + 1, hi, depth + 1)
 
 
+DEALERON_ID_RE = re.compile(r'"?[Dd]ealerId"?[\'":=\s]+(\d+)')
+DEALERON_PAGE_RE = re.compile(r'"?[Pp]ageId"?[\'":=\s]+(\d+)')
+
+
+def dealeron_fetch_dealer(session, dealer_name, base_url, city, out,
+                          condition="used"):
+    """DealerOn sites: each SRP page embeds a dealerId/pageId pair whose
+    'cosmos' JSON API returns the full vehicle cards."""
+    path = f"/{condition}-inventory/index.htm"
+    try:
+        r = session.get(base_url + path, timeout=40)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"  {dealer_name} {condition} srp: {e}")
+        return
+    did, pid = DEALERON_ID_RE.search(r.text), DEALERON_PAGE_RE.search(r.text)
+    if not (did and pid):
+        print(f"  {dealer_name} {condition}: dealerId/pageId not found")
+        return
+    api = (f"{base_url}/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/"
+           f"{did.group(1)}/{pid.group(1)}")
+    pt, total_pages = 1, 1
+    while pt <= total_pages and pt <= 30:
+        try:
+            rr = session.get(f"{api}?pt={pt}", timeout=40,
+                             headers={"Referer": base_url + path})
+            rr.raise_for_status()
+            d = rr.json()
+        except Exception as e:
+            print(f"  {dealer_name} {condition} pt={pt}: {e}")
+            return
+        time.sleep(DEALER_DELAY_S)
+        total_pages = ((d.get("Paging") or {}).get("PaginationDataModel")
+                       or {}).get("TotalPages", 1)
+        for card in d.get("DisplayCards", []):
+            v = card.get("VehicleCard") or {}
+            vin = v.get("VehicleVin")
+            if not vin:
+                continue
+            mileage = to_int(re.sub(r"[^0-9]", "",
+                                    str(v.get("VehicleMileage")
+                                        or v.get("Mileage") or "")) or None)
+            image = None
+            im = re.search(r'https://[^"\s\\]+?\.(?:jpg|jpeg|png|webp)[^"\s\\]*',
+                           json.dumps(v.get("VehicleImageModel") or {}))
+            if im:
+                image = im.group(0)
+            url_path = v.get("VehicleDetailUrl") or ""
+            key = f"dealer:{vin}"
+            out[key] = {
+                "key": key, "source": "dealer", "source_id": vin, "vin": vin,
+                "url": base_url + url_path if url_path.startswith("/")
+                       else (url_path or base_url),
+                "title": v.get("VehicleName"),
+                "year": to_int(v.get("VehicleYear")),
+                "make": v.get("VehicleMake"), "model": v.get("VehicleModel"),
+                "trim": v.get("VehicleTrim"),
+                "price": to_int(v.get("VehicleInternetPrice"))
+                         or to_int(v.get("VehicleMsrp")),
+                "mileage": mileage,
+                "city": city, "lat": None, "lng": None,
+                "seller_type": "dealer", "seller_name": dealer_name,
+                "kbb_fair_price": None, "image_url": image,
+                "dom": None, "posted": None, "condition": condition,
+            }
+        pt += 1
+
+
 def fetch_dealers():
     out = {}
     for dealer_name, platform, url, city in DEALER_SITES:
@@ -763,6 +861,9 @@ def fetch_dealers():
                 dep_fetch_dealer(session, dealer_name,
                                  url.replace("tp=used", f"tp={condition}"),
                                  city, out, condition)
+            elif platform == "dealeron":
+                dealeron_fetch_dealer(session, dealer_name, url, city, out,
+                                      condition)
         print(f"  {dealer_name}: {len(out) - before} vehicles")
     return list(out.values())
 
