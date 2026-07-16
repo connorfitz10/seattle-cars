@@ -148,6 +148,10 @@ DEALER_SITES = [
      "https://www.younkernissan.com/search/used/?tp=used", "Renton"),
     ("Bellevue Nissan", "dep",
      "https://www.bellevuenissan.com/search/used/?tp=used", "Bellevue"),
+    ("Toyota of Renton", "ddc",
+     "https://www.toyotaofrenton.com", "Renton"),
+    ("Eastside Subaru", "ddc",
+     "https://www.eastsidesubaru.com", "Kirkland"),
 ]
 DEALER_MAX_PAGES = 12
 DEALER_DELAY_S = 0.8
@@ -1022,6 +1026,82 @@ def dealeron_fetch_dealer(session, dealer_name, base_url, city, out,
         pt += 1
 
 
+def ddc_fetch_dealer(session, dealer_name, base_url, city, out,
+                     condition="used"):
+    """Dealer.com sites server-render each SRP page's vehicles as
+    schema.org objects typed ["Product","Car"]; ?start=N paginates."""
+    path = f"/{condition}-inventory/index.htm"
+    for start in range(0, 24 * 30, 24):
+        try:
+            r = session.get(base_url + path, params={"start": str(start)},
+                            timeout=40)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"  {dealer_name} {condition} start={start}: {e}")
+            return
+        time.sleep(DEALER_DELAY_S)
+        added = 0
+        for block in DEP_LDJSON_RE.findall(r.text):
+            try:
+                d = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            # cars sit nested inside a CollectionPage — walk the whole tree
+            items = []
+
+            def _walk(node, depth=0):
+                if depth > 8:
+                    return
+                if isinstance(node, dict):
+                    types = node.get("@type")
+                    types = types if isinstance(types, list) else [types]
+                    if "Car" in types and node.get("vehicleIdentificationNumber"):
+                        items.append(node)
+                    else:
+                        for v in node.values():
+                            _walk(v, depth + 1)
+                elif isinstance(node, list):
+                    for v in node:
+                        _walk(v, depth + 1)
+
+            _walk(d)
+            for it in items:
+                vin = it.get("vehicleIdentificationNumber")
+                key = f"dealer:{vin}"
+                if key in out:
+                    continue
+                offer = it.get("offers")
+                offer = (offer[0] if isinstance(offer, list) and offer
+                         else offer) or {}
+                mileage = it.get("mileageFromOdometer")
+                if isinstance(mileage, dict):
+                    mileage = mileage.get("value")
+                brand = it.get("brand")
+                make = brand.get("name") if isinstance(brand, dict) else brand
+                cond = ("new" if "NewCondition" in str(it.get("itemCondition", ""))
+                        else "used") if it.get("itemCondition") else condition
+                out[key] = {
+                    "key": key, "source": "dealer", "source_id": vin,
+                    "vin": vin,
+                    "url": it.get("url") or offer.get("url") or base_url + path,
+                    "title": it.get("name"),
+                    "year": to_int(it.get("vehicleModelDate")),
+                    "make": MAKES.get(str(make).lower(), make) if make else None,
+                    "model": it.get("model"), "trim": None,
+                    "price": to_int(offer.get("price")),
+                    "mileage": to_int(mileage),
+                    "city": city, "lat": None, "lng": None,
+                    "seller_type": "dealer", "seller_name": dealer_name,
+                    "kbb_fair_price": None,
+                    "image_url": it.get("image") if isinstance(it.get("image"), str)
+                                 else None,
+                    "dom": None, "posted": None, "condition": cond,
+                }
+                added += 1
+        if added == 0:
+            return
+
+
 def fetch_dealers():
     out = {}
     for dealer_name, platform, url, city in DEALER_SITES:
@@ -1038,6 +1118,9 @@ def fetch_dealers():
             elif platform == "dealeron":
                 dealeron_fetch_dealer(session, dealer_name, url, city, out,
                                       condition)
+            elif platform == "ddc":
+                ddc_fetch_dealer(session, dealer_name, url, city, out,
+                                 condition)
         print(f"  {dealer_name}: {len(out) - before} vehicles")
     return list(out.values())
 
