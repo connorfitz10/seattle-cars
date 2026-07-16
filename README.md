@@ -102,5 +102,35 @@ crontab -e
 ```
 
 (cron on modern macOS needs Full Disk Access for the calling shell, or
-use `launchctl` with a LaunchAgent; on Windows use Task Scheduler like
-skagit-housing does.)
+use `launchctl` with a LaunchAgent.)
+
+### Windows setup (same pattern as skagit-housing)
+
+One-time, in PowerShell on the PC:
+
+```powershell
+# 1. Clone next to skagit-housing (git credentials already work there)
+cd C:\path\where\skagit-housing\lives
+git clone https://github.com/connorfitz10/seattle-cars.git
+cd seattle-cars
+pip install -r requirements.txt
+
+# 2. Prove it works end to end once (takes ~25-35 min)
+powershell -ExecutionPolicy Bypass -File .\daily_update.ps1
+
+# 3. Register the daily task (7:45 AM, staggered after the housing
+#    task's 7:30; catches up after wake if the PC was asleep)
+$action  = New-ScheduledTaskAction -Execute "powershell.exe" `
+  -Argument "-ExecutionPolicy Bypass -File `"$PWD\daily_update.ps1`""
+$trigger = New-ScheduledTaskTrigger -Daily -At 7:45AM
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
+  -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+Register-ScheduledTask -TaskName "Seattle Cars Daily Fetch" `
+  -Action $action -Trigger $trigger -Settings $settings
+```
+
+`-StartWhenAvailable` is the "run as soon as possible after a missed
+start" behavior the housing task uses; `-WakeToRun` additionally lets it
+wake the PC from sleep. Check on it later with
+`Get-ScheduledTaskInfo "Seattle Cars Daily Fetch"` or the Task Scheduler
+GUI (look for last run result 0x0).
