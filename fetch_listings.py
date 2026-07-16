@@ -44,11 +44,13 @@ JSON_PATH = DATA_DIR / "listings.json"
 ZIP, RADIUS = "98101", 50
 
 # --- craigslist ---
-CL_AREA_ID = 2                    # seattle (covers see/est/sno/tac/kit/skc/oly)
+CL_REGIONS = [                    # (areaId, warm-up URL)
+    (2, "https://seattle.craigslist.org/search/cta"),      # covers Skagit (skc)
+    (217, "https://bellingham.craigslist.org/search/cta"), # Whatcom County
+]
 CL_SAPI = "https://sapi.craigslist.org/web/v8/postings/search/full"
-CL_WARM = "https://seattle.craigslist.org/search/cta"
 CL_BAND_CAP = 350                 # split a price band when it holds more
-CL_MAX_REQUESTS = 500
+CL_MAX_REQUESTS = 600
 CL_DELAY_S = 0.35
 
 # --- autotrader ---
@@ -125,6 +127,10 @@ DEALER_SITES = [
      "https://www.magictoyota.com", "Edmonds"),
     ("Toyota of Lake City", "dealeron",
      "https://www.toyotaoflakecity.com", "Seattle"),
+    ("Younker Nissan", "dep",
+     "https://www.younkernissan.com/search/used/?tp=used", "Renton"),
+    ("Bellevue Nissan", "dep",
+     "https://www.bellevuenissan.com/search/used/?tp=used", "Bellevue"),
 ]
 DEALER_MAX_PAGES = 12
 DEALER_DELAY_S = 0.8
@@ -199,9 +205,9 @@ def to_int(v):
 # craigslist
 # --------------------------------------------------------------------------
 
-def cl_query(session, min_price, max_price, purveyor):
+def cl_query(session, area_id, min_price, max_price, purveyor):
     params = {
-        "batch": f"{CL_AREA_ID}-0-360-1-0",
+        "batch": f"{area_id}-0-360-1-0",
         "cc": "US", "lang": "en", "searchPath": "cta",
         "min_price": str(min_price), "max_price": str(max_price),
         "purveyor": purveyor,
@@ -274,14 +280,14 @@ def cl_parse_items(data, purveyor, out):
         }
 
 
-def cl_sweep(session, purveyor, lo, hi, out, budget, depth=0):
+def cl_sweep(session, area_id, purveyor, lo, hi, out, budget, depth=0):
     if budget[0] <= 0:
         return
     budget[0] -= 1
     data = None
     for attempt in (1, 2):
         try:
-            data = cl_query(session, lo, hi, purveyor)
+            data = cl_query(session, area_id, lo, hi, purveyor)
             break
         except Exception as e:
             if attempt == 2:
@@ -293,23 +299,25 @@ def cl_sweep(session, purveyor, lo, hi, out, budget, depth=0):
     cl_parse_items(data, purveyor, out)
     if total > CL_BAND_CAP and lo < hi and depth < 24:
         mid = (lo + hi) // 2
-        cl_sweep(session, purveyor, lo, mid, out, budget, depth + 1)
-        cl_sweep(session, purveyor, mid + 1, hi, out, budget, depth + 1)
+        cl_sweep(session, area_id, purveyor, lo, mid, out, budget, depth + 1)
+        cl_sweep(session, area_id, purveyor, mid + 1, hi, out, budget, depth + 1)
 
 
 def fetch_craigslist():
-    session = requests.Session(impersonate="chrome")
-    session.get(CL_WARM, timeout=30)
     out, budget, expected = {}, [CL_MAX_REQUESTS], 0
-    for purveyor in ("owner", "dealer"):
-        before = len(out)
-        try:
-            expected += cl_query(session, 0, 2_000_000, purveyor).get(
-                "totalResultCount", 0)
-        except Exception:
-            pass
-        cl_sweep(session, purveyor, 0, 2_000_000, out, budget)
-        print(f"  craigslist by-{purveyor}: {len(out) - before} listings")
+    for area_id, warm in CL_REGIONS:
+        session = requests.Session(impersonate="chrome")
+        session.get(warm, timeout=30)
+        for purveyor in ("owner", "dealer"):
+            before = len(out)
+            try:
+                expected += cl_query(session, area_id, 0, 2_000_000,
+                                     purveyor).get("totalResultCount", 0)
+            except Exception:
+                pass
+            cl_sweep(session, area_id, purveyor, 0, 2_000_000, out, budget)
+            print(f"  craigslist area {area_id} by-{purveyor}: "
+                  f"{len(out) - before} listings")
     print(f"  craigslist requests used: {CL_MAX_REQUESTS - budget[0]}")
     # A sweep well short of the site's own count means bands failed
     # (rate limiting); deactivating on such a partial view would wrongly
