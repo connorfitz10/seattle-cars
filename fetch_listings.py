@@ -81,9 +81,20 @@ EDMUNDS_DELAY_S = 2.5
 
 # --- carvana ---
 CARVANA_URL = "https://www.carvana.com/cars"
-CARVANA_PAGES = 20                # ~440 cars/day of the national inventory
+# Mainstream-brand segments swept COMPLETELY every day (their SEO slugs
+# genuinely filter), so price drops in these are caught within a day —
+# plus a small rotating sample of everything else for benchmark breadth.
+CARVANA_SEGMENTS = ["toyota-under-25000", "honda-under-25000",
+                    "subaru-under-25000", "mazda-under-25000"]
+CARVANA_SEGMENT_MAX_PAGES = 50
+CARVANA_PAGES = 10                # rotating general sample on top
 CARVANA_IMG = "https://cdnblob.fastly.carvana.io"
 CARVANA_DELAY_S = 0.8
+
+# --- truecar ---
+TRUECAR_URL = "https://www.truecar.com/used-cars-for-sale/listings/location-seattle-wa/"
+TRUECAR_PAGES = 20                # ~600/day sample, 30 per page
+TRUECAR_DELAY_S = 0.8
 
 # --- local dealership sites, keyed by inventory platform ---
 # teamvelocity: server-rendered grid at /inventory/used?page=N
@@ -153,6 +164,7 @@ SOURCE_POLICY = {
     "edmunds":    {"grace_days": 10, "min_fetch": 200},
     "dealer":     {"grace_days": 2, "min_fetch": 50},
     "carvana":    {"grace_days": 10, "min_fetch": 100},
+    "truecar":    {"grace_days": 10, "min_fetch": 100},
 }
 
 # Make aliases for parsing craigslist titles (alias -> canonical).
@@ -636,19 +648,110 @@ def edmunds_parse_results(results, today_ms, out):
 
 
 # --------------------------------------------------------------------------
+# truecar
+# --------------------------------------------------------------------------
+
+TRUECAR_NEXT_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
+
+
+def truecar_collect(node, listings, depth=0):
+    if depth > 14:
+        return
+    if isinstance(node, dict):
+        veh = node.get("vehicle")
+        if isinstance(veh, dict) and veh.get("vin") and veh.get("make"):
+            listings.append(node)
+            return
+        for v in node.values():
+            truecar_collect(v, listings, depth + 1)
+    elif isinstance(node, list):
+        for v in node:
+            truecar_collect(v, listings, depth + 1)
+
+
+def fetch_truecar():
+    session = requests.Session(impersonate="chrome")
+    out = {}
+    for page in range(1, TRUECAR_PAGES + 1):
+        try:
+            r = session.get(TRUECAR_URL, params={"page": str(page)}, timeout=40)
+            r.raise_for_status()
+            m = TRUECAR_NEXT_RE.search(r.text)
+            data = json.loads(m.group(1)) if m else {}
+        except Exception as e:
+            print(f"  truecar page {page}: {e}")
+            break
+        time.sleep(TRUECAR_DELAY_S)
+        listings = []
+        truecar_collect(data, listings)
+        if not listings:
+            break
+        for h in listings:
+            veh = h["vehicle"]
+            vin = veh["vin"]
+            key = f"truecar:{vin}"
+            if key in out:
+                continue
+            pricing = h.get("pricing") or {}
+            dealer = h.get("dealership") or {}
+            dloc = (dealer.get("location") or {})
+            image = None
+            for k, v in h.items():
+                if k.startswith("galleryImages") and isinstance(v, list) and v:
+                    image = v[0].get("url") if isinstance(v[0], dict) else v[0]
+                    break
+            out[key] = {
+                "key": key, "source": "truecar", "source_id": str(h.get("id") or vin),
+                "vin": vin,
+                "url": f"https://www.truecar.com/used-cars-for-sale/listing/{vin}/",
+                "title": None,
+                "year": to_int(veh.get("year")),
+                "make": (veh["make"].get("name") if isinstance(veh.get("make"), dict)
+                         else veh.get("make")),
+                "model": (veh["model"].get("name") if isinstance(veh.get("model"), dict)
+                          else veh.get("model")),
+                "trim": next((x for x in (veh.get("style"),
+                                          (veh.get("details") or {}).get("trim")
+                                          if isinstance(veh.get("details"), dict)
+                                          else None)
+                              if isinstance(x, str)), None),
+                "price": to_int(pricing.get("listPrice")),
+                "mileage": to_int(veh.get("mileage")),
+                "city": dloc.get("city"), "lat": None, "lng": None,
+                "seller_type": "dealer", "seller_name": dealer.get("name"),
+                "kbb_fair_price": None, "image_url": image,
+                "dom": None, "posted": None,
+                "condition": "new" if str(veh.get("condition", "")).lower() == "new"
+                             else "used",
+            }
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------
 # carvana
 # --------------------------------------------------------------------------
 
 def fetch_carvana():
     """Carvana's search pages are Next.js server-rendered; the vehicle
     records ride in escaped 'flight data' chunks. National fixed-price
-    inventory (delivers locally) — a rotating ~440-car sample serves as a
-    price benchmark like CarMax, not a census."""
+    inventory (delivers locally): the mainstream-brand segments are swept
+    completely daily, the rest sampled as a benchmark."""
     session = requests.Session(impersonate="chrome")
     out = {}
-    for page in range(1, CARVANA_PAGES + 1):
+    for seg in CARVANA_SEGMENTS:
+        before = len(out)
+        carvana_sweep(session, f"{CARVANA_URL}/{seg}",
+                      CARVANA_SEGMENT_MAX_PAGES, out)
+        print(f"  carvana {seg}: {len(out) - before} cars")
+    carvana_sweep(session, CARVANA_URL, CARVANA_PAGES, out)
+    return list(out.values())
+
+
+def carvana_sweep(session, url, max_pages, out):
+    for page in range(1, max_pages + 1):
         try:
-            r = session.get(CARVANA_URL, params={"page": str(page)}, timeout=40)
+            r = session.get(url, params={"page": str(page)}, timeout=40)
             r.raise_for_status()
         except Exception as e:
             print(f"  carvana page {page}: {e}")
@@ -689,7 +792,6 @@ def fetch_carvana():
             added += 1
         if added == 0:
             break
-    return list(out.values())
 
 
 # --------------------------------------------------------------------------
@@ -1135,6 +1237,7 @@ FETCHERS = {
     "edmunds": fetch_edmunds,
     "dealer": fetch_dealers,
     "carvana": fetch_carvana,
+    "truecar": fetch_truecar,
 }
 
 
