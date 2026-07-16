@@ -1,4 +1,4 @@
-# Seattle Used Car Tracker
+# Seattle Car Tracker
 
 A local dashboard of used-car listings across the Seattle metro area
 (50 miles of downtown), aggregated from Craigslist, Autotrader, Cars.com
@@ -43,6 +43,7 @@ pip install -r requirements.txt
 | CarMax     | full local sweep daily (~850) | Clean fixed-price benchmark, full listing detail. |
 | Autotrader | daily sample (~3.5k) | Serves only the first ~430 results of any query and the metro has ~48k cars, so each price band contributes its cheapest/priciest ~430, alternating sort direction by day. Includes KBB fair-purchase-price, which powers the "Deals" tab. |
 | Cars.com   | newest ~500 daily | New-to-market dealer inventory; overlaps Autotrader heavily, so it isn't swept exhaustively. |
+| Carvana    | rotating ~420 daily | National no-haggle inventory (delivers locally), parsed from the escaped Next.js payload in their server-rendered search pages. A price benchmark like CarMax, not a census. |
 | Edmunds    | nearest ~600 daily | Distance-sorted stable subset (same cars re-seen daily). Includes Edmunds' own market-value estimate and deal rating. Their bot protection answers only the first request per session, so the fetch uses one session per page. |
 
 | Dealer sites | full sweep daily (~4,700) | Direct from 18 local dealerships' own websites, Renton/Bellevue to Bellingham, via three platform parsers: **Team Velocity** (Honda/Toyota of Seattle, Klein Honda, Lynnwood Honda, Honda of Burlington), **Dealer eProcess** (Jerry Smith Chevrolet, Dewey Griffin Subaru, Foothills Toyota, Dwayne Lane's Auto Family + Skagit Subaru, Carter VW, Carter Acura, Doug's, Rodland Toyota, Younker Nissan, Bellevue Nissan — schema.org JSON-LD with recursive price-band splitting, which also works for stores like Foothills that hide prices on the visible grid), and **DealerOn** (VW of Bellingham, Magic Toyota, Toyota of Lake City — self-configuring 'cosmos' JSON API). Add stores to `DEALER_SITES` in fetch_listings.py. Not addable: Dealer Inspire sites (Skagit Ford, Blade Chevrolet, Bickford, Marysville Toyota — bot-blocked) and a few broken-TLS or niche-platform sites (Harris Ford, Northwest Honda, Carter Subaru Shoreline, Lexus of Seattle, BMW Seattle, Roy Robinson, Wilson Motors, Diehl Ford). |

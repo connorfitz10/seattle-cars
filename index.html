@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Seattle Used Car Tracker</title>
+<title>Seattle Car Tracker</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1f2937; --muted: #6b7280;
     --accent: #0f4c81; --accent-light: #dbeafe; --drop: #dc2626; --drop-bg: #fee2e2;
     --new-bg: #dcfce7; --new-ink: #15803d; --deal-bg: #fef3c7; --deal-ink: #b45309;
     --border: #e5e7eb; --star: #f59e0b;
-    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04; --c-edmunds: #16a34a; --c-dealer: #db2777;
+    --c-craigslist: #7c3aed; --c-autotrader: #ea580c; --c-carscom: #2563eb; --c-carmax: #ca8a04; --c-edmunds: #16a34a; --c-dealer: #db2777; --c-carvana: #0e7490;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
@@ -68,7 +68,7 @@
 </head>
 <body>
 <header>
-  <h1>🚗 Seattle Used Car Tracker</h1>
+  <h1>🚗 Seattle Car Tracker</h1>
   <span class="updated" id="updated"></span>
 </header>
 
@@ -84,7 +84,7 @@
   <div><label>Price min</label><input type="number" id="f-pmin" placeholder="$ min" step="1000"></div>
   <div><label>Price max</label><input type="number" id="f-max" placeholder="$ max" step="1000"></div>
   <div><label>Miles max</label><input type="number" id="f-miles" placeholder="max" step="10000"></div>
-  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option><option value="edmunds">Edmunds</option><option value="dealer">Dealer sites</option></select></div>
+  <div><label>Source</label><select id="f-source"><option value="">All</option><option value="craigslist">Craigslist</option><option value="autotrader">Autotrader</option><option value="carscom">Cars.com</option><option value="carmax">CarMax</option><option value="edmunds">Edmunds</option><option value="dealer">Dealer sites</option><option value="carvana">Carvana</option></select></div>
   <div><label>Seller</label><select id="f-seller"><option value="">All</option><option value="owner">Private party</option><option value="dealer">Dealer</option></select></div>
   <div><label>Sort</label><select id="f-sort">
     <option value="new">Newest listed</option>
@@ -125,7 +125,8 @@ const fmtK = n => n == null ? '—' : (n >= 1000 ? Math.round(n/1000) + 'k' : n)
 const daysAgo = iso => Math.round((Date.now() - new Date(iso + 'T12:00')) / 86400000);
 const SRC = { craigslist: ['Craigslist', 'var(--c-craigslist)'], autotrader: ['Autotrader', 'var(--c-autotrader)'],
               carscom: ['Cars.com', 'var(--c-carscom)'], carmax: ['CarMax', 'var(--c-carmax)'],
-              edmunds: ['Edmunds', 'var(--c-edmunds)'], dealer: ['Dealer site', 'var(--c-dealer)'] };
+              edmunds: ['Edmunds', 'var(--c-edmunds)'], dealer: ['Dealer site', 'var(--c-dealer)'],
+              carvana: ['Carvana', 'var(--c-carvana)'] };
 const FAIR = { autotrader: 'KBB fair', edmunds: 'Mkt est.' };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 

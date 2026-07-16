@@ -79,6 +79,12 @@ EDMUNDS_PAGES = 30                # nearest ~600 used listings per day
 EDMUNDS_NEW_PAGES = 10            # nearest ~200 new listings per day
 EDMUNDS_DELAY_S = 2.5
 
+# --- carvana ---
+CARVANA_URL = "https://www.carvana.com/cars"
+CARVANA_PAGES = 20                # ~440 cars/day of the national inventory
+CARVANA_IMG = "https://cdnblob.fastly.carvana.io"
+CARVANA_DELAY_S = 0.8
+
 # --- local dealership sites, keyed by inventory platform ---
 # teamvelocity: server-rendered grid at /inventory/used?page=N
 # dep (Dealer eProcess): 12 vehicles per page as schema.org JSON-LD, no
@@ -146,6 +152,7 @@ SOURCE_POLICY = {
     "carmax":     {"grace_days": 2, "min_fetch": 200},
     "edmunds":    {"grace_days": 10, "min_fetch": 200},
     "dealer":     {"grace_days": 2, "min_fetch": 50},
+    "carvana":    {"grace_days": 10, "min_fetch": 100},
 }
 
 # Make aliases for parsing craigslist titles (alias -> canonical).
@@ -629,6 +636,63 @@ def edmunds_parse_results(results, today_ms, out):
 
 
 # --------------------------------------------------------------------------
+# carvana
+# --------------------------------------------------------------------------
+
+def fetch_carvana():
+    """Carvana's search pages are Next.js server-rendered; the vehicle
+    records ride in escaped 'flight data' chunks. National fixed-price
+    inventory (delivers locally) — a rotating ~440-car sample serves as a
+    price benchmark like CarMax, not a census."""
+    session = requests.Session(impersonate="chrome")
+    out = {}
+    for page in range(1, CARVANA_PAGES + 1):
+        try:
+            r = session.get(CARVANA_URL, params={"page": str(page)}, timeout=40)
+            r.raise_for_status()
+        except Exception as e:
+            print(f"  carvana page {page}: {e}")
+            break
+        time.sleep(CARVANA_DELAY_S)
+        text = r.text.replace('\\"', '"')
+        chunks = text.split('"vehicleId":')
+        added = 0
+        for chunk in chunks[1:]:
+            cid = re.match(r"([0-9]+)", chunk)
+            vin = re.search(r'"vin":"([A-HJ-NPR-Z0-9]{17})"', chunk)
+            if not (cid and vin):
+                continue
+            key = f"carvana:{vin.group(1)}"
+            if key in out:
+                continue
+            g = lambda pat: (re.search(pat, chunk) or [None, None])[1]
+            img = g(r'"(?:heroImageUrl|imageUrl)":"([^"]+)"')
+            if img and img.startswith("/"):
+                img = CARVANA_IMG + img
+            out[key] = {
+                "key": key, "source": "carvana", "source_id": cid.group(1),
+                "vin": vin.group(1),
+                "url": f"https://www.carvana.com/vehicle/{cid.group(1)}",
+                "title": None,
+                "year": to_int(g(r'"year":([0-9]{4})')),
+                "make": g(r'"make":"([^"]+)"'),
+                "model": g(r'"model":"([^"]+)"'),
+                "trim": g(r'"trim":"([^"]+)"'),
+                "price": to_int(g(r'"incentivizedPrice":([0-9]{4,6})')
+                                or g(r'"price":([0-9]{4,6})')),
+                "mileage": to_int(g(r'"mileage":([0-9]+)')),
+                "city": None, "lat": None, "lng": None,
+                "seller_type": "dealer", "seller_name": "Carvana",
+                "kbb_fair_price": None, "image_url": img,
+                "dom": None, "posted": None, "condition": "used",
+            }
+            added += 1
+        if added == 0:
+            break
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------
 # local dealership sites (Team Velocity platform)
 # --------------------------------------------------------------------------
 
@@ -1070,6 +1134,7 @@ FETCHERS = {
     "carmax": fetch_carmax,
     "edmunds": fetch_edmunds,
     "dealer": fetch_dealers,
+    "carvana": fetch_carvana,
 }
 
 
